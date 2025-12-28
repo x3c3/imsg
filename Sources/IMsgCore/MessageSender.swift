@@ -117,6 +117,9 @@ public struct MessageSender {
     if let errorNumber = errorInfo[NSAppleScript.errorNumber] as? Int, errorNumber == -1743 {
       return true
     }
+    if errorInfo[NSAppleScript.errorMessage] == nil {
+      return true
+    }
     if let message = errorInfo[NSAppleScript.errorMessage] as? String {
       let lower = message.lowercased()
       return lower.contains("not authorized") || lower.contains("not authorised")
