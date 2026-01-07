@@ -34,6 +34,38 @@ extension MessageStore {
     return false
   }
 
+  static func detectAudioMessageColumn(connection: Connection) -> Bool {
+    do {
+      let rows = try connection.prepare("PRAGMA table_info(message)")
+      for row in rows {
+        if let name = row[1] as? String,
+          name.caseInsensitiveCompare("is_audio_message") == .orderedSame
+        {
+          return true
+        }
+      }
+    } catch {
+      return false
+    }
+    return false
+  }
+
+  static func detectAttachmentUserInfo(connection: Connection) -> Bool {
+    do {
+      let rows = try connection.prepare("PRAGMA table_info(attachment)")
+      for row in rows {
+        if let name = row[1] as? String,
+          name.caseInsensitiveCompare("user_info") == .orderedSame
+        {
+          return true
+        }
+      }
+    } catch {
+      return false
+    }
+    return false
+  }
+
   static func enhance(error: Error, path: String) -> Error {
     let message = String(describing: error).lowercased()
     if message.contains("out of memory (14)") || message.contains("authorization denied")

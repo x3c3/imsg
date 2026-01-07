@@ -14,9 +14,11 @@ public final class MessageStore: @unchecked Sendable {
   private let connection: Connection
   private let queue: DispatchQueue
   private let queueKey = DispatchSpecificKey<Void>()
-  private let hasAttributedBody: Bool
-  private let hasReactionColumns: Bool
-  private let hasDestinationCallerID: Bool
+  let hasAttributedBody: Bool
+  let hasReactionColumns: Bool
+  let hasDestinationCallerID: Bool
+  let hasAudioMessageColumn: Bool
+  let hasAttachmentUserInfo: Bool
 
   public init(path: String = MessageStore.defaultPath) throws {
     let normalized = NSString(string: path).expandingTildeInPath
@@ -33,6 +35,12 @@ public final class MessageStore: @unchecked Sendable {
       self.hasDestinationCallerID = MessageStore.detectDestinationCallerID(
         connection: self.connection
       )
+      self.hasAudioMessageColumn = MessageStore.detectAudioMessageColumn(
+        connection: self.connection
+      )
+      self.hasAttachmentUserInfo = MessageStore.detectAttachmentUserInfo(
+        connection: self.connection
+      )
     } catch {
       throw MessageStore.enhance(error: error, path: normalized)
     }
@@ -43,7 +51,9 @@ public final class MessageStore: @unchecked Sendable {
     path: String,
     hasAttributedBody: Bool? = nil,
     hasReactionColumns: Bool? = nil,
-    hasDestinationCallerID: Bool? = nil
+    hasDestinationCallerID: Bool? = nil,
+    hasAudioMessageColumn: Bool? = nil,
+    hasAttachmentUserInfo: Bool? = nil
   ) throws {
     self.path = path
     self.queue = DispatchQueue(label: "imsg.db.test", qos: .userInitiated)
@@ -64,6 +74,16 @@ public final class MessageStore: @unchecked Sendable {
       self.hasDestinationCallerID = hasDestinationCallerID
     } else {
       self.hasDestinationCallerID = MessageStore.detectDestinationCallerID(connection: connection)
+    }
+    if let hasAudioMessageColumn {
+      self.hasAudioMessageColumn = hasAudioMessageColumn
+    } else {
+      self.hasAudioMessageColumn = MessageStore.detectAudioMessageColumn(connection: connection)
+    }
+    if let hasAttachmentUserInfo {
+      self.hasAttachmentUserInfo = hasAttachmentUserInfo
+    } else {
+      self.hasAttachmentUserInfo = MessageStore.detectAttachmentUserInfo(connection: connection)
     }
   }
 
@@ -143,146 +163,7 @@ public final class MessageStore: @unchecked Sendable {
     }
   }
 
-  public func messages(chatID: Int64, limit: Int) throws -> [Message] {
-    let bodyColumn = hasAttributedBody ? "m.attributedBody" : "NULL"
-    let guidColumn = hasReactionColumns ? "m.guid" : "NULL"
-    let associatedGuidColumn = hasReactionColumns ? "m.associated_message_guid" : "NULL"
-    let associatedTypeColumn = hasReactionColumns ? "m.associated_message_type" : "NULL"
-    let destinationCallerColumn = hasDestinationCallerID ? "m.destination_caller_id" : "NULL"
-    let reactionFilter =
-      hasReactionColumns
-      ? " AND (m.associated_message_type IS NULL OR m.associated_message_type < 2000 OR m.associated_message_type > 3006)"
-      : ""
-    let sql = """
-      SELECT m.ROWID, m.handle_id, h.id, IFNULL(m.text, '') AS text, m.date, m.is_from_me, m.service,
-             \(destinationCallerColumn) AS destination_caller_id,
-             \(guidColumn) AS guid, \(associatedGuidColumn) AS associated_guid, \(associatedTypeColumn) AS associated_type,
-             (SELECT COUNT(*) FROM message_attachment_join maj WHERE maj.message_id = m.ROWID) AS attachments,
-             \(bodyColumn) AS body
-      FROM message m
-      JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
-      LEFT JOIN handle h ON m.handle_id = h.ROWID
-      WHERE cmj.chat_id = ?\(reactionFilter)
-      ORDER BY m.date DESC
-      LIMIT ?
-      """
-    return try withConnection { db in
-      var messages: [Message] = []
-      for row in try db.prepare(sql, chatID, limit) {
-        let rowID = int64Value(row[0]) ?? 0
-        let handleID = int64Value(row[1])
-        var sender = stringValue(row[2])
-        let text = stringValue(row[3])
-        let date = appleDate(from: int64Value(row[4]))
-        let isFromMe = boolValue(row[5])
-        let service = stringValue(row[6])
-        let destinationCallerID = stringValue(row[7])
-        if sender.isEmpty && !destinationCallerID.isEmpty {
-          sender = destinationCallerID
-        }
-        let guid = stringValue(row[8])
-        let associatedGuid = stringValue(row[9])
-        let associatedType = intValue(row[10])
-        let attachments = intValue(row[11]) ?? 0
-        let body = dataValue(row[12])
-        let resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
-        let replyToGUID = replyToGUID(
-          associatedGuid: associatedGuid,
-          associatedType: associatedType
-        )
-        messages.append(
-          Message(
-            rowID: rowID,
-            chatID: chatID,
-            sender: sender,
-            text: resolvedText,
-            date: date,
-            isFromMe: isFromMe,
-            service: service,
-            handleID: handleID,
-            attachmentsCount: attachments,
-            guid: guid,
-            replyToGUID: replyToGUID
-          ))
-      }
-      return messages
-    }
-  }
-
-  public func messagesAfter(afterRowID: Int64, chatID: Int64?, limit: Int) throws -> [Message] {
-    let bodyColumn = hasAttributedBody ? "m.attributedBody" : "NULL"
-    let guidColumn = hasReactionColumns ? "m.guid" : "NULL"
-    let associatedGuidColumn = hasReactionColumns ? "m.associated_message_guid" : "NULL"
-    let associatedTypeColumn = hasReactionColumns ? "m.associated_message_type" : "NULL"
-    let destinationCallerColumn = hasDestinationCallerID ? "m.destination_caller_id" : "NULL"
-    let reactionFilter =
-      hasReactionColumns
-      ? " AND (m.associated_message_type IS NULL OR m.associated_message_type < 2000 OR m.associated_message_type > 3006)"
-      : ""
-    var sql = """
-      SELECT m.ROWID, cmj.chat_id, m.handle_id, h.id, IFNULL(m.text, '') AS text, m.date, m.is_from_me, m.service,
-             \(destinationCallerColumn) AS destination_caller_id,
-             \(guidColumn) AS guid, \(associatedGuidColumn) AS associated_guid, \(associatedTypeColumn) AS associated_type,
-             (SELECT COUNT(*) FROM message_attachment_join maj WHERE maj.message_id = m.ROWID) AS attachments,
-             \(bodyColumn) AS body
-      FROM message m
-      LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
-      LEFT JOIN handle h ON m.handle_id = h.ROWID
-      WHERE m.ROWID > ?\(reactionFilter)
-      """
-    var bindings: [Binding?] = [afterRowID]
-    if let chatID {
-      sql += " AND cmj.chat_id = ?"
-      bindings.append(chatID)
-    }
-    sql += " ORDER BY m.ROWID ASC LIMIT ?"
-    bindings.append(limit)
-
-    return try withConnection { db in
-      var messages: [Message] = []
-      for row in try db.prepare(sql, bindings) {
-        let rowID = int64Value(row[0]) ?? 0
-        let resolvedChatID = int64Value(row[1]) ?? chatID ?? 0
-        let handleID = int64Value(row[2])
-        var sender = stringValue(row[3])
-        let text = stringValue(row[4])
-        let date = appleDate(from: int64Value(row[5]))
-        let isFromMe = boolValue(row[6])
-        let service = stringValue(row[7])
-        let destinationCallerID = stringValue(row[8])
-        if sender.isEmpty && !destinationCallerID.isEmpty {
-          sender = destinationCallerID
-        }
-        let guid = stringValue(row[9])
-        let associatedGuid = stringValue(row[10])
-        let associatedType = intValue(row[11])
-        let attachments = intValue(row[12]) ?? 0
-        let body = dataValue(row[13])
-        let resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
-        let replyToGUID = replyToGUID(
-          associatedGuid: associatedGuid,
-          associatedType: associatedType
-        )
-        messages.append(
-          Message(
-            rowID: rowID,
-            chatID: resolvedChatID,
-            sender: sender,
-            text: resolvedText,
-            date: date,
-            isFromMe: isFromMe,
-            service: service,
-            handleID: handleID,
-            attachmentsCount: attachments,
-            guid: guid,
-            replyToGUID: replyToGUID
-          ))
-      }
-      return messages
-    }
-  }
-
-  private func withConnection<T>(_ block: (Connection) throws -> T) throws -> T {
+  func withConnection<T>(_ block: (Connection) throws -> T) throws -> T {
     if DispatchQueue.getSpecific(key: queueKey) != nil {
       return try block(connection)
     }
@@ -323,6 +204,47 @@ extension MessageStore {
           ))
       }
       return metas
+    }
+  }
+
+  func audioTranscription(for messageID: Int64) throws -> String? {
+    guard hasAttachmentUserInfo else { return nil }
+    let sql = """
+      SELECT a.user_info
+      FROM message_attachment_join maj
+      JOIN attachment a ON a.ROWID = maj.attachment_id
+      WHERE maj.message_id = ?
+      LIMIT 1
+      """
+    return try withConnection { db in
+      for row in try db.prepare(sql, messageID) {
+        let info = dataValue(row[0])
+        guard !info.isEmpty else { continue }
+        if let transcription = parseAudioTranscription(from: info) {
+          return transcription
+        }
+      }
+      return nil
+    }
+  }
+
+  private func parseAudioTranscription(from data: Data) -> String? {
+    do {
+      let plist = try PropertyListSerialization.propertyList(
+        from: data,
+        options: [],
+        format: nil
+      )
+      guard
+        let dict = plist as? [String: Any],
+        let transcription = dict["audio-transcription"] as? String,
+        !transcription.isEmpty
+      else {
+        return nil
+      }
+      return transcription
+    } catch {
+      return nil
     }
   }
 
