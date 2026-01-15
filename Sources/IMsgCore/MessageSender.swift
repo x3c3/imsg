@@ -173,17 +173,17 @@ public struct MessageSender {
 
   private func resolveChatTarget(_ options: inout MessageSendOptions) -> String {
     let guid = options.chatGUID.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !guid.isEmpty {
-      return guid
-    }
     let identifier = options.chatIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
-    if identifier.isEmpty {
-      return ""
-    }
-    if looksLikeHandle(identifier) {
+    if !identifier.isEmpty && looksLikeHandle(identifier) {
       if options.recipient.isEmpty {
         options.recipient = identifier
       }
+      return ""
+    }
+    if !guid.isEmpty {
+      return guid
+    }
+    if identifier.isEmpty {
       return ""
     }
     return identifier

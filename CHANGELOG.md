@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fix: prefer handle sends when chat identifier is a direct handle
+
 ## 0.4.0 - 2026-01-07
 - feat: surface audio message transcriptions (thanks @antons)
 - fix: stage message attachments in Messages attachments directory (thanks @antons)
