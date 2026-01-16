@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 - Unreleased
 
 - fix: prefer handle sends when chat identifier is a direct handle
+- fix: apply history filters before limit (#20, thanks @tommybananas)
 
 ## 0.4.0 - 2026-01-07
 - feat: surface audio message transcriptions (thanks @antons)
