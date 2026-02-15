@@ -60,24 +60,40 @@ extension MessageStore {
     return try withConnection { db in
       var messages: [Message] = []
       for row in try db.prepare(sql, bindings) {
-        let rowID = int64Value(row[0]) ?? 0
-        let handleID = int64Value(row[1])
-        var sender = stringValue(row[2])
-        let text = stringValue(row[3])
-        let date = appleDate(from: int64Value(row[4]))
-        let isFromMe = boolValue(row[5])
-        let service = stringValue(row[6])
-        let isAudioMessage = boolValue(row[7])
-        let destinationCallerID = stringValue(row[8])
+        let colRowID = 0
+        let colHandleID = 1
+        let colSender = 2
+        let colText = 3
+        let colDate = 4
+        let colIsFromMe = 5
+        let colService = 6
+        let colIsAudioMessage = 7
+        let colDestinationCallerID = 8
+        let colGUID = 9
+        let colAssociatedGUID = 10
+        let colAssociatedType = 11
+        let colAttachments = 12
+        let colBody = 13
+        let colThreadOriginatorGUID = 14
+
+        let rowID = int64Value(row[colRowID]) ?? 0
+        let handleID = int64Value(row[colHandleID])
+        var sender = stringValue(row[colSender])
+        let text = stringValue(row[colText])
+        let date = appleDate(from: int64Value(row[colDate]))
+        let isFromMe = boolValue(row[colIsFromMe])
+        let service = stringValue(row[colService])
+        let isAudioMessage = boolValue(row[colIsAudioMessage])
+        let destinationCallerID = stringValue(row[colDestinationCallerID])
         if sender.isEmpty && !destinationCallerID.isEmpty {
           sender = destinationCallerID
         }
-        let guid = stringValue(row[9])
-        let associatedGuid = stringValue(row[10])
-        let associatedType = intValue(row[11])
-        let attachments = intValue(row[12]) ?? 0
-        let body = dataValue(row[13])
-        let threadOriginatorGUID = stringValue(row[14])
+        let guid = stringValue(row[colGUID])
+        let associatedGuid = stringValue(row[colAssociatedGUID])
+        let associatedType = intValue(row[colAssociatedType])
+        let attachments = intValue(row[colAttachments]) ?? 0
+        let body = dataValue(row[colBody])
+        let threadOriginatorGUID = stringValue(row[colThreadOriginatorGUID])
         var resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
         if isAudioMessage, let transcription = try audioTranscription(for: rowID) {
           resolvedText = transcription
@@ -142,25 +158,42 @@ extension MessageStore {
     return try withConnection { db in
       var messages: [Message] = []
       for row in try db.prepare(sql, bindings) {
-        let rowID = int64Value(row[0]) ?? 0
-        let resolvedChatID = int64Value(row[1]) ?? chatID ?? 0
-        let handleID = int64Value(row[2])
-        var sender = stringValue(row[3])
-        let text = stringValue(row[4])
-        let date = appleDate(from: int64Value(row[5]))
-        let isFromMe = boolValue(row[6])
-        let service = stringValue(row[7])
-        let isAudioMessage = boolValue(row[8])
-        let destinationCallerID = stringValue(row[9])
+        let colRowID = 0
+        let colChatID = 1
+        let colHandleID = 2
+        let colSender = 3
+        let colText = 4
+        let colDate = 5
+        let colIsFromMe = 6
+        let colService = 7
+        let colIsAudioMessage = 8
+        let colDestinationCallerID = 9
+        let colGUID = 10
+        let colAssociatedGUID = 11
+        let colAssociatedType = 12
+        let colAttachments = 13
+        let colBody = 14
+        let colThreadOriginatorGUID = 15
+
+        let rowID = int64Value(row[colRowID]) ?? 0
+        let resolvedChatID = int64Value(row[colChatID]) ?? chatID ?? 0
+        let handleID = int64Value(row[colHandleID])
+        var sender = stringValue(row[colSender])
+        let text = stringValue(row[colText])
+        let date = appleDate(from: int64Value(row[colDate]))
+        let isFromMe = boolValue(row[colIsFromMe])
+        let service = stringValue(row[colService])
+        let isAudioMessage = boolValue(row[colIsAudioMessage])
+        let destinationCallerID = stringValue(row[colDestinationCallerID])
         if sender.isEmpty && !destinationCallerID.isEmpty {
           sender = destinationCallerID
         }
-        let guid = stringValue(row[10])
-        let associatedGuid = stringValue(row[11])
-        let associatedType = intValue(row[12])
-        let attachments = intValue(row[13]) ?? 0
-        let body = dataValue(row[14])
-        let threadOriginatorGUID = stringValue(row[15])
+        let guid = stringValue(row[colGUID])
+        let associatedGuid = stringValue(row[colAssociatedGUID])
+        let associatedType = intValue(row[colAssociatedType])
+        let attachments = intValue(row[colAttachments]) ?? 0
+        let body = dataValue(row[colBody])
+        let threadOriginatorGUID = stringValue(row[colThreadOriginatorGUID])
         var resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
         if isAudioMessage, let transcription = try audioTranscription(for: rowID) {
           resolvedText = transcription
