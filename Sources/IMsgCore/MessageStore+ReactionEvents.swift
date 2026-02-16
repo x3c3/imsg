@@ -98,24 +98,21 @@ extension MessageStore {
         let destinationCallerID = stringValue(row[9])
         let body = dataValue(row[10])
         let origRowID = int64Value(row[11])
-        
+
         if sender.isEmpty && !destinationCallerID.isEmpty {
           sender = destinationCallerID
         }
-        
+
         let resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
-        let isAdd = ReactionType.isReactionAdd(typeValue)
-        let rawType = isAdd ? typeValue : typeValue - 1000
-        
-        // Extract custom emoji for type 2006/3006
-        let customEmoji: String? = (rawType == 2006) ? extractCustomEmoji(from: resolvedText) : nil
-        guard let reactionType = ReactionType(rawValue: rawType, customEmoji: customEmoji) else {
+        let decoded = decodeReaction(
+          associatedType: typeValue,
+          associatedGUID: associatedGUID,
+          text: resolvedText
+        )
+        guard let reactionType = decoded.reactionType, let isAdd = decoded.isReactionAdd else {
           continue
         }
-        
-        // Normalize the associated GUID (remove "p:X/" prefix)
-        let reactedToGUID = normalizeAssociatedGUID(associatedGUID)
-        
+
         events.append(ReactionEvent(
           rowID: rowID,
           chatID: resolvedChatID,
@@ -124,7 +121,7 @@ extension MessageStore {
           sender: sender,
           isFromMe: isFromMe,
           date: date,
-          reactedToGUID: reactedToGUID,
+          reactedToGUID: decoded.reactedToGUID ?? "",
           reactedToID: origRowID,
           text: resolvedText
         ))

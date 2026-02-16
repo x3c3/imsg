@@ -30,7 +30,7 @@ func chatPayloadIncludesParticipantsAndGroupFlag() {
 }
 
 @Test
-func messagePayloadIncludesChatFields() {
+func messagePayloadIncludesChatFields() throws {
   let message = Message(
     rowID: 5,
     chatID: 10,
@@ -71,7 +71,7 @@ func messagePayloadIncludesChatFields() {
     date: Date(timeIntervalSince1970: 2),
     associatedMessageID: 5
   )
-  let payload = messagePayload(
+  let payload = try messagePayload(
     message: message,
     chatInfo: chatInfo,
     participants: ["+111"],
@@ -93,7 +93,7 @@ func messagePayloadIncludesChatFields() {
 }
 
 @Test
-func messagePayloadOmitsEmptyReplyToGuid() {
+func messagePayloadOmitsEmptyReplyToGuid() throws {
   let message = Message(
     rowID: 6,
     chatID: 10,
@@ -107,7 +107,7 @@ func messagePayloadOmitsEmptyReplyToGuid() {
     guid: "msg-guid-6",
     replyToGUID: nil
   )
-  let payload = messagePayload(
+  let payload = try messagePayload(
     message: message,
     chatInfo: nil,
     participants: [],

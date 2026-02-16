@@ -28,49 +28,17 @@ func messagePayload(
   participants: [String],
   attachments: [AttachmentMeta],
   reactions: [Reaction]
-) -> [String: Any] {
+) throws -> [String: Any] {
   let identifier = chatInfo?.identifier ?? ""
   let guid = chatInfo?.guid ?? ""
   let name = chatInfo?.name ?? ""
-  var payload: [String: Any] = [
-    "id": message.rowID,
-    "chat_id": message.chatID,
-    "guid": message.guid,
-    "sender": message.sender,
-    "is_from_me": message.isFromMe,
-    "text": message.text,
-    "created_at": CLIISO8601.format(message.date),
-    "attachments": attachments.map { attachmentPayload($0) },
-    "reactions": reactions.map { reactionPayload($0) },
-    "chat_identifier": identifier,
-    "chat_guid": guid,
-    "chat_name": name,
-    "participants": participants,
-    "is_group": isGroupHandle(identifier: identifier, guid: guid),
-  ]
-  if let replyToGUID = message.replyToGUID, !replyToGUID.isEmpty {
-    payload["reply_to_guid"] = replyToGUID
-  }
-  if let destinationCallerID = message.destinationCallerID, !destinationCallerID.isEmpty {
-    payload["destination_caller_id"] = destinationCallerID
-  }
-  // Add reaction event metadata if this message is a reaction
-  if message.isReaction {
-    payload["is_reaction"] = true
-    if let reactionType = message.reactionType {
-      payload["reaction_type"] = reactionType.name
-      payload["reaction_emoji"] = reactionType.emoji
-    }
-    if let isReactionAdd = message.isReactionAdd {
-      payload["is_reaction_add"] = isReactionAdd
-    }
-    if let reactedToGUID = message.reactedToGUID, !reactedToGUID.isEmpty {
-      payload["reacted_to_guid"] = reactedToGUID
-    }
-  }
-  if let threadOriginatorGUID = message.threadOriginatorGUID, !threadOriginatorGUID.isEmpty {
-    payload["thread_originator_guid"] = threadOriginatorGUID
-  }
+  let core = MessagePayload(message: message, attachments: attachments, reactions: reactions)
+  var payload = try core.asDictionary()
+  payload["chat_identifier"] = identifier
+  payload["chat_guid"] = guid
+  payload["chat_name"] = name
+  payload["participants"] = participants
+  payload["is_group"] = isGroupHandle(identifier: identifier, guid: guid)
   return payload
 }
 

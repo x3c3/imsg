@@ -1,6 +1,42 @@
 import Foundation
 import SQLite
 
+private struct MessageRowColumns {
+  let rowID: Int
+  let chatID: Int?
+  let handleID: Int
+  let sender: Int
+  let text: Int
+  let date: Int
+  let isFromMe: Int
+  let service: Int
+  let isAudioMessage: Int
+  let destinationCallerID: Int
+  let guid: Int
+  let associatedGUID: Int
+  let associatedType: Int
+  let attachments: Int
+  let body: Int
+  let threadOriginatorGUID: Int
+}
+
+private struct DecodedMessageRow {
+  let rowID: Int64
+  let chatID: Int64
+  let handleID: Int64?
+  let sender: String
+  let text: String
+  let date: Date
+  let isFromMe: Bool
+  let service: String
+  let destinationCallerID: String
+  let guid: String
+  let associatedGUID: String
+  let associatedType: Int?
+  let attachments: Int
+  let threadOriginatorGUID: String
+}
+
 extension MessageStore {
   public func messages(chatID: Int64, limit: Int) throws -> [Message] {
     return try messages(chatID: chatID, limit: limit, filter: nil)
@@ -56,67 +92,52 @@ extension MessageStore {
 
     sql += " ORDER BY m.date DESC LIMIT ?"
     bindings.append(limit)
+    let columns = MessageRowColumns(
+      rowID: 0,
+      chatID: nil,
+      handleID: 1,
+      sender: 2,
+      text: 3,
+      date: 4,
+      isFromMe: 5,
+      service: 6,
+      isAudioMessage: 7,
+      destinationCallerID: 8,
+      guid: 9,
+      associatedGUID: 10,
+      associatedType: 11,
+      attachments: 12,
+      body: 13,
+      threadOriginatorGUID: 14
+    )
 
     return try withConnection { db in
       var messages: [Message] = []
       for row in try db.prepare(sql, bindings) {
-        let colRowID = 0
-        let colHandleID = 1
-        let colSender = 2
-        let colText = 3
-        let colDate = 4
-        let colIsFromMe = 5
-        let colService = 6
-        let colIsAudioMessage = 7
-        let colDestinationCallerID = 8
-        let colGUID = 9
-        let colAssociatedGUID = 10
-        let colAssociatedType = 11
-        let colAttachments = 12
-        let colBody = 13
-        let colThreadOriginatorGUID = 14
-
-        let rowID = int64Value(row[colRowID]) ?? 0
-        let handleID = int64Value(row[colHandleID])
-        var sender = stringValue(row[colSender])
-        let text = stringValue(row[colText])
-        let date = appleDate(from: int64Value(row[colDate]))
-        let isFromMe = boolValue(row[colIsFromMe])
-        let service = stringValue(row[colService])
-        let isAudioMessage = boolValue(row[colIsAudioMessage])
-        let destinationCallerID = stringValue(row[colDestinationCallerID])
-        if sender.isEmpty && !destinationCallerID.isEmpty {
-          sender = destinationCallerID
-        }
-        let guid = stringValue(row[colGUID])
-        let associatedGuid = stringValue(row[colAssociatedGUID])
-        let associatedType = intValue(row[colAssociatedType])
-        let attachments = intValue(row[colAttachments]) ?? 0
-        let body = dataValue(row[colBody])
-        let threadOriginatorGUID = stringValue(row[colThreadOriginatorGUID])
-        var resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
-        if isAudioMessage, let transcription = try audioTranscription(for: rowID) {
-          resolvedText = transcription
-        }
+        let decoded = try decodeMessageRow(row, columns: columns, fallbackChatID: chatID)
         let replyToGUID = replyToGUID(
-          associatedGuid: associatedGuid,
-          associatedType: associatedType
+          associatedGuid: decoded.associatedGUID,
+          associatedType: decoded.associatedType
         )
         messages.append(
           Message(
-            rowID: rowID,
-            chatID: chatID,
-            sender: sender,
-            text: resolvedText,
-            date: date,
-            isFromMe: isFromMe,
-            service: service,
-            handleID: handleID,
-            attachmentsCount: attachments,
-            guid: guid,
-            replyToGUID: replyToGUID,
-            threadOriginatorGUID: threadOriginatorGUID.isEmpty ? nil : threadOriginatorGUID,
-            destinationCallerID: destinationCallerID.isEmpty ? nil : destinationCallerID
+            rowID: decoded.rowID,
+            chatID: decoded.chatID,
+            sender: decoded.sender,
+            text: decoded.text,
+            date: decoded.date,
+            isFromMe: decoded.isFromMe,
+            service: decoded.service,
+            handleID: decoded.handleID,
+            attachmentsCount: decoded.attachments,
+            guid: decoded.guid,
+            routing: Message.RoutingMetadata(
+              replyToGUID: replyToGUID,
+              threadOriginatorGUID: decoded.threadOriginatorGUID.isEmpty
+                ? nil : decoded.threadOriginatorGUID,
+              destinationCallerID: decoded.destinationCallerID.isEmpty
+                ? nil : decoded.destinationCallerID
+            )
           ))
       }
       return messages
@@ -124,10 +145,20 @@ extension MessageStore {
   }
 
   public func messagesAfter(afterRowID: Int64, chatID: Int64?, limit: Int) throws -> [Message] {
-    return try messagesAfter(afterRowID: afterRowID, chatID: chatID, limit: limit, includeReactions: false)
+    return try messagesAfter(
+      afterRowID: afterRowID,
+      chatID: chatID,
+      limit: limit,
+      includeReactions: false
+    )
   }
 
-  public func messagesAfter(afterRowID: Int64, chatID: Int64?, limit: Int, includeReactions: Bool) throws -> [Message] {
+  public func messagesAfter(
+    afterRowID: Int64,
+    chatID: Int64?,
+    limit: Int,
+    includeReactions: Bool
+  ) throws -> [Message] {
     let bodyColumn = hasAttributedBody ? "m.attributedBody" : "NULL"
     let guidColumn = hasReactionColumns ? "m.guid" : "NULL"
     let associatedGuidColumn = hasReactionColumns ? "m.associated_message_guid" : "NULL"
@@ -141,9 +172,12 @@ extension MessageStore {
     if includeReactions {
       reactionFilter = ""
     } else {
-      reactionFilter = hasReactionColumns
-        ? " AND (m.associated_message_type IS NULL OR m.associated_message_type < 2000 OR m.associated_message_type > 3006)"
-        : ""
+      if hasReactionColumns {
+        reactionFilter =
+          " AND (m.associated_message_type IS NULL OR m.associated_message_type < 2000 OR m.associated_message_type > 3006)"
+      } else {
+        reactionFilter = ""
+      }
     }
     var sql = """
       SELECT m.ROWID, cmj.chat_id, m.handle_id, h.id, IFNULL(m.text, '') AS text, m.date, m.is_from_me, m.service,
@@ -164,92 +198,117 @@ extension MessageStore {
     }
     sql += " ORDER BY m.ROWID ASC LIMIT ?"
     bindings.append(limit)
+    let columns = MessageRowColumns(
+      rowID: 0,
+      chatID: 1,
+      handleID: 2,
+      sender: 3,
+      text: 4,
+      date: 5,
+      isFromMe: 6,
+      service: 7,
+      isAudioMessage: 8,
+      destinationCallerID: 9,
+      guid: 10,
+      associatedGUID: 11,
+      associatedType: 12,
+      attachments: 13,
+      body: 14,
+      threadOriginatorGUID: 15
+    )
 
     return try withConnection { db in
       var messages: [Message] = []
       for row in try db.prepare(sql, bindings) {
-        let colRowID = 0
-        let colChatID = 1
-        let colHandleID = 2
-        let colSender = 3
-        let colText = 4
-        let colDate = 5
-        let colIsFromMe = 6
-        let colService = 7
-        let colIsAudioMessage = 8
-        let colDestinationCallerID = 9
-        let colGUID = 10
-        let colAssociatedGUID = 11
-        let colAssociatedType = 12
-        let colAttachments = 13
-        let colBody = 14
-        let colThreadOriginatorGUID = 15
-
-        let rowID = int64Value(row[colRowID]) ?? 0
-        let resolvedChatID = int64Value(row[colChatID]) ?? chatID ?? 0
-        let handleID = int64Value(row[colHandleID])
-        var sender = stringValue(row[colSender])
-        let text = stringValue(row[colText])
-        let date = appleDate(from: int64Value(row[colDate]))
-        let isFromMe = boolValue(row[colIsFromMe])
-        let service = stringValue(row[colService])
-        let isAudioMessage = boolValue(row[colIsAudioMessage])
-        let destinationCallerID = stringValue(row[colDestinationCallerID])
-        if sender.isEmpty && !destinationCallerID.isEmpty {
-          sender = destinationCallerID
-        }
-        let guid = stringValue(row[colGUID])
-        let associatedGuid = stringValue(row[colAssociatedGUID])
-        let associatedType = intValue(row[colAssociatedType])
-        let attachments = intValue(row[colAttachments]) ?? 0
-        let body = dataValue(row[colBody])
-        let threadOriginatorGUID = stringValue(row[colThreadOriginatorGUID])
-        var resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
-        if isAudioMessage, let transcription = try audioTranscription(for: rowID) {
-          resolvedText = transcription
-        }
+        let decoded = try decodeMessageRow(row, columns: columns, fallbackChatID: chatID)
         let replyToGUID = replyToGUID(
-          associatedGuid: associatedGuid,
-          associatedType: associatedType
+          associatedGuid: decoded.associatedGUID,
+          associatedType: decoded.associatedType
         )
-        
-        // Determine if this is a reaction event
-        let typeValue = associatedType ?? 0
-        let isReactionEvent = ReactionType.isReaction(typeValue)
-        var reactionType: ReactionType? = nil
-        var isReactionAdd: Bool? = nil
-        var reactedToGUID: String? = nil
-        
-        if isReactionEvent {
-          isReactionAdd = ReactionType.isReactionAdd(typeValue)
-          let rawType = (isReactionAdd ?? true) ? typeValue : typeValue - 1000
-          let customEmoji: String? = (rawType == 2006) ? extractCustomEmoji(from: resolvedText) : nil
-          reactionType = ReactionType(rawValue: rawType, customEmoji: customEmoji)
-          reactedToGUID = normalizeAssociatedGUID(associatedGuid)
-        }
-        
+        let reaction = decodeReaction(
+          associatedType: decoded.associatedType,
+          associatedGUID: decoded.associatedGUID,
+          text: decoded.text
+        )
+
         messages.append(
           Message(
-            rowID: rowID,
-            chatID: resolvedChatID,
-            sender: sender,
-            text: resolvedText,
-            date: date,
-            isFromMe: isFromMe,
-            service: service,
-            handleID: handleID,
-            attachmentsCount: attachments,
-            guid: guid,
-            replyToGUID: replyToGUID,
-            threadOriginatorGUID: threadOriginatorGUID.isEmpty ? nil : threadOriginatorGUID,
-            destinationCallerID: destinationCallerID.isEmpty ? nil : destinationCallerID,
-            isReaction: isReactionEvent,
-            reactionType: reactionType,
-            isReactionAdd: isReactionAdd,
-            reactedToGUID: reactedToGUID
+            rowID: decoded.rowID,
+            chatID: decoded.chatID,
+            sender: decoded.sender,
+            text: decoded.text,
+            date: decoded.date,
+            isFromMe: decoded.isFromMe,
+            service: decoded.service,
+            handleID: decoded.handleID,
+            attachmentsCount: decoded.attachments,
+            guid: decoded.guid,
+            routing: Message.RoutingMetadata(
+              replyToGUID: replyToGUID,
+              threadOriginatorGUID: decoded.threadOriginatorGUID.isEmpty
+                ? nil : decoded.threadOriginatorGUID,
+              destinationCallerID: decoded.destinationCallerID.isEmpty
+                ? nil : decoded.destinationCallerID
+            ),
+            reaction: Message.ReactionMetadata(
+              isReaction: reaction.isReaction,
+              reactionType: reaction.reactionType,
+              isReactionAdd: reaction.isReactionAdd,
+              reactedToGUID: reaction.reactedToGUID
+            )
           ))
       }
       return messages
     }
+  }
+
+  private func decodeMessageRow(
+    _ row: [Binding?],
+    columns: MessageRowColumns,
+    fallbackChatID: Int64?
+  ) throws -> DecodedMessageRow {
+    let rowID = int64Value(row[columns.rowID]) ?? 0
+    let resolvedChatID = columns.chatID.flatMap { int64Value(row[$0]) } ?? fallbackChatID ?? 0
+    let handleID = int64Value(row[columns.handleID])
+    let sender = stringValue(row[columns.sender])
+    let text = stringValue(row[columns.text])
+    let date = appleDate(from: int64Value(row[columns.date]))
+    let isFromMe = boolValue(row[columns.isFromMe])
+    let service = stringValue(row[columns.service])
+    let isAudioMessage = boolValue(row[columns.isAudioMessage])
+    let destinationCallerID = stringValue(row[columns.destinationCallerID])
+    let guid = stringValue(row[columns.guid])
+    let associatedGUID = stringValue(row[columns.associatedGUID])
+    let associatedType = intValue(row[columns.associatedType])
+    let attachments = intValue(row[columns.attachments]) ?? 0
+    let body = dataValue(row[columns.body])
+    let threadOriginatorGUID = stringValue(row[columns.threadOriginatorGUID])
+
+    var resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
+    if isAudioMessage, let transcription = try audioTranscription(for: rowID) {
+      resolvedText = transcription
+    }
+
+    var resolvedSender = sender
+    if resolvedSender.isEmpty && !destinationCallerID.isEmpty {
+      resolvedSender = destinationCallerID
+    }
+
+    return DecodedMessageRow(
+      rowID: rowID,
+      chatID: resolvedChatID,
+      handleID: handleID,
+      sender: resolvedSender,
+      text: resolvedText,
+      date: date,
+      isFromMe: isFromMe,
+      service: service,
+      destinationCallerID: destinationCallerID,
+      guid: guid,
+      associatedGUID: associatedGUID,
+      associatedType: associatedType,
+      attachments: attachments,
+      threadOriginatorGUID: threadOriginatorGUID
+    )
   }
 }

@@ -217,6 +217,41 @@ public struct ChatInfo: Sendable, Equatable {
 }
 
 public struct Message: Sendable, Equatable {
+  public struct RoutingMetadata: Sendable, Equatable {
+    public let replyToGUID: String?
+    public let threadOriginatorGUID: String?
+    public let destinationCallerID: String?
+
+    public init(
+      replyToGUID: String? = nil,
+      threadOriginatorGUID: String? = nil,
+      destinationCallerID: String? = nil
+    ) {
+      self.replyToGUID = replyToGUID
+      self.threadOriginatorGUID = threadOriginatorGUID
+      self.destinationCallerID = destinationCallerID
+    }
+  }
+
+  public struct ReactionMetadata: Sendable, Equatable {
+    public let isReaction: Bool
+    public let reactionType: ReactionType?
+    public let isReactionAdd: Bool?
+    public let reactedToGUID: String?
+
+    public init(
+      isReaction: Bool = false,
+      reactionType: ReactionType? = nil,
+      isReactionAdd: Bool? = nil,
+      reactedToGUID: String? = nil
+    ) {
+      self.isReaction = isReaction
+      self.reactionType = reactionType
+      self.isReactionAdd = isReactionAdd
+      self.reactedToGUID = reactedToGUID
+    }
+  }
+
   public let rowID: Int64
   public let chatID: Int64
   public let guid: String
@@ -255,6 +290,39 @@ public struct Message: Sendable, Equatable {
     handleID: Int64?,
     attachmentsCount: Int,
     guid: String = "",
+    routing: RoutingMetadata = RoutingMetadata(),
+    reaction: ReactionMetadata = ReactionMetadata()
+  ) {
+    self.rowID = rowID
+    self.chatID = chatID
+    self.guid = guid
+    self.replyToGUID = routing.replyToGUID
+    self.threadOriginatorGUID = routing.threadOriginatorGUID
+    self.sender = sender
+    self.text = text
+    self.date = date
+    self.isFromMe = isFromMe
+    self.service = service
+    self.handleID = handleID
+    self.attachmentsCount = attachmentsCount
+    self.destinationCallerID = routing.destinationCallerID
+    self.isReaction = reaction.isReaction
+    self.reactionType = reaction.reactionType
+    self.isReactionAdd = reaction.isReactionAdd
+    self.reactedToGUID = reaction.reactedToGUID
+  }
+
+  public init(
+    rowID: Int64,
+    chatID: Int64,
+    sender: String,
+    text: String,
+    date: Date,
+    isFromMe: Bool,
+    service: String,
+    handleID: Int64?,
+    attachmentsCount: Int,
+    guid: String = "",
     replyToGUID: String? = nil,
     threadOriginatorGUID: String? = nil,
     destinationCallerID: String? = nil,
@@ -263,23 +331,29 @@ public struct Message: Sendable, Equatable {
     isReactionAdd: Bool? = nil,
     reactedToGUID: String? = nil
   ) {
-    self.rowID = rowID
-    self.chatID = chatID
-    self.guid = guid
-    self.replyToGUID = replyToGUID
-    self.threadOriginatorGUID = threadOriginatorGUID
-    self.sender = sender
-    self.text = text
-    self.date = date
-    self.isFromMe = isFromMe
-    self.service = service
-    self.handleID = handleID
-    self.attachmentsCount = attachmentsCount
-    self.destinationCallerID = destinationCallerID
-    self.isReaction = isReaction
-    self.reactionType = reactionType
-    self.isReactionAdd = isReactionAdd
-    self.reactedToGUID = reactedToGUID
+    self.init(
+      rowID: rowID,
+      chatID: chatID,
+      sender: sender,
+      text: text,
+      date: date,
+      isFromMe: isFromMe,
+      service: service,
+      handleID: handleID,
+      attachmentsCount: attachmentsCount,
+      guid: guid,
+      routing: RoutingMetadata(
+        replyToGUID: replyToGUID,
+        threadOriginatorGUID: threadOriginatorGUID,
+        destinationCallerID: destinationCallerID
+      ),
+      reaction: ReactionMetadata(
+        isReaction: isReaction,
+        reactionType: reactionType,
+        isReactionAdd: isReactionAdd,
+        reactedToGUID: reactedToGUID
+      )
+    )
   }
 }
 

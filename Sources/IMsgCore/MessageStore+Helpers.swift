@@ -2,6 +2,13 @@ import Foundation
 import SQLite
 
 extension MessageStore {
+  struct DecodedReaction: Sendable {
+    let isReaction: Bool
+    let reactionType: ReactionType?
+    let isReactionAdd: Bool?
+    let reactedToGUID: String?
+  }
+
   static func tableColumns(connection: Connection, table: String) -> Set<String> {
     do {
       let rows = try connection.prepare("PRAGMA table_info(\(table))")
@@ -115,5 +122,39 @@ extension MessageStore {
       return nil
     }
     return normalized
+  }
+
+  func decodeReaction(
+    associatedType: Int?,
+    associatedGUID: String,
+    text: String
+  ) -> DecodedReaction {
+    guard let typeValue = associatedType, ReactionType.isReaction(typeValue) else {
+      return DecodedReaction(
+        isReaction: false,
+        reactionType: nil,
+        isReactionAdd: nil,
+        reactedToGUID: nil
+      )
+    }
+
+    let isAdd = ReactionType.isReactionAdd(typeValue)
+    let rawType = isAdd ? typeValue : typeValue - 1000
+    let customEmoji = (rawType == 2006) ? extractCustomEmoji(from: text) : nil
+    guard let reactionType = ReactionType(rawValue: rawType, customEmoji: customEmoji) else {
+      return DecodedReaction(
+        isReaction: true,
+        reactionType: nil,
+        isReactionAdd: isAdd,
+        reactedToGUID: normalizeAssociatedGUID(associatedGUID)
+      )
+    }
+
+    return DecodedReaction(
+      isReaction: true,
+      reactionType: reactionType,
+      isReactionAdd: isAdd,
+      reactedToGUID: normalizeAssociatedGUID(associatedGUID)
+    )
   }
 }

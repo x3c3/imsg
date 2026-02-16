@@ -12,10 +12,9 @@ final class RPCServer {
   private let watcher: MessageWatcher
   private let output: RPCOutput
   private let cache: ChatCache
+  private let subscriptions = SubscriptionStore()
   private let verbose: Bool
   private let sendMessage: (MessageSendOptions) throws -> Void
-  private var nextSubscriptionID = 1
-  private var subscriptions: [Int: Task<Void, Never>] = [:]
 
   init(
     store: MessageStore,
@@ -37,9 +36,7 @@ final class RPCServer {
       if trimmed.isEmpty { continue }
       await handleLine(trimmed)
     }
-    for task in subscriptions.values {
-      task.cancel()
-    }
+    await subscriptions.cancelAll()
   }
 
   func handleLineForTesting(_ line: String) async {
@@ -77,117 +74,15 @@ final class RPCServer {
     do {
       switch method {
       case "chats.list":
-        let limit = intParam(params["limit"]) ?? 20
-        let chats = try store.listChats(limit: max(limit, 1))
-        let payloads = try chats.map { chat in
-          let info = try cache.info(chatID: chat.id)
-          let participants = try cache.participants(chatID: chat.id)
-          let identifier = info?.identifier ?? chat.identifier
-          let guid = info?.guid ?? ""
-          let name = (info?.name.isEmpty == false ? info?.name : nil) ?? chat.name
-          let service = info?.service ?? chat.service
-          return chatPayload(
-            id: chat.id,
-            identifier: identifier,
-            guid: guid,
-            name: name,
-            service: service,
-            lastMessageAt: chat.lastMessageAt,
-            participants: participants
-          )
-        }
-        respond(id: id, result: ["chats": payloads])
+        try await handleChatsList(id: id, params: params)
       case "messages.history":
-        guard let chatID = int64Param(params["chat_id"]) else {
-          throw RPCError.invalidParams("chat_id is required")
-        }
-        let limit = intParam(params["limit"]) ?? 50
-        let participants = stringArrayParam(params["participants"])
-        let startISO = stringParam(params["start"])
-        let endISO = stringParam(params["end"])
-        let includeAttachments = boolParam(params["attachments"]) ?? false
-        let filter = try MessageFilter.fromISO(
-          participants: participants,
-          startISO: startISO,
-          endISO: endISO
-        )
-        let filtered = try store.messages(chatID: chatID, limit: max(limit, 1), filter: filter)
-        let payloads = try filtered.map { message in
-          try buildMessagePayload(
-            store: store,
-            cache: cache,
-            message: message,
-            includeAttachments: includeAttachments
-          )
-        }
-        respond(id: id, result: ["messages": payloads])
+        try await handleMessagesHistory(id: id, params: params)
       case "watch.subscribe":
-        let chatID = int64Param(params["chat_id"])
-        let sinceRowID = int64Param(params["since_rowid"])
-        let participants = stringArrayParam(params["participants"])
-        let startISO = stringParam(params["start"])
-        let endISO = stringParam(params["end"])
-        let includeAttachments = boolParam(params["attachments"]) ?? false
-        let includeReactions = boolParam(params["include_reactions"]) ?? false
-        let filter = try MessageFilter.fromISO(
-          participants: participants,
-          startISO: startISO,
-          endISO: endISO
-        )
-        let config = MessageWatcherConfiguration(includeReactions: includeReactions)
-        let subID = nextSubscriptionID
-        nextSubscriptionID += 1
-        let localStore = store
-        let localWatcher = watcher
-        let localCache = cache
-        let localWriter = output
-        let localFilter = filter
-        let localChatID = chatID
-        let localSinceRowID = sinceRowID
-        let localConfig = config
-        let localIncludeAttachments = includeAttachments
-        let task = Task {
-          do {
-            for try await message in localWatcher.stream(
-              chatID: localChatID,
-              sinceRowID: localSinceRowID,
-              configuration: localConfig
-            ) {
-              if Task.isCancelled { return }
-              if !localFilter.allows(message) { continue }
-              let payload = try buildMessagePayload(
-                store: localStore,
-                cache: localCache,
-                message: message,
-                includeAttachments: localIncludeAttachments
-              )
-              localWriter.sendNotification(
-                method: "message",
-                params: ["subscription": subID, "message": payload]
-              )
-            }
-          } catch {
-            localWriter.sendNotification(
-              method: "error",
-              params: [
-                "subscription": subID,
-                "error": ["message": String(describing: error)],
-              ]
-            )
-          }
-        }
-        subscriptions[subID] = task
-        respond(id: id, result: ["subscription": subID])
+        try await handleWatchSubscribe(id: id, params: params)
       case "watch.unsubscribe":
-        guard let subID = intParam(params["subscription"]) else {
-          throw RPCError.invalidParams("subscription is required")
-        }
-        if let task = subscriptions.removeValue(forKey: subID) {
-          task.cancel()
-        }
-        respond(id: id, result: ["ok": true])
+        try await handleWatchUnsubscribe(id: id, params: params)
       case "send":
-        try handleSend(params: params, id: id)
+        try await handleSend(params: params, id: id)
       default:
         output.sendError(id: id, error: RPCError.methodNotFound(method))
       }
@@ -213,7 +108,134 @@ final class RPCServer {
     output.sendResponse(id: id, result: result)
   }
 
-  private func handleSend(params: [String: Any], id: Any?) throws {
+  private func handleChatsList(id: Any?, params: [String: Any]) async throws {
+    let limit = intParam(params["limit"]) ?? 20
+    let chats = try store.listChats(limit: max(limit, 1))
+    var payloads: [[String: Any]] = []
+    payloads.reserveCapacity(chats.count)
+
+    for chat in chats {
+      let info = try await cache.info(chatID: chat.id)
+      let participants = try await cache.participants(chatID: chat.id)
+      let identifier = info?.identifier ?? chat.identifier
+      let guid = info?.guid ?? ""
+      let name = (info?.name.isEmpty == false ? info?.name : nil) ?? chat.name
+      let service = info?.service ?? chat.service
+      payloads.append(
+        chatPayload(
+          id: chat.id,
+          identifier: identifier,
+          guid: guid,
+          name: name,
+          service: service,
+          lastMessageAt: chat.lastMessageAt,
+          participants: participants
+        ))
+    }
+
+    respond(id: id, result: ["chats": payloads])
+  }
+
+  private func handleMessagesHistory(id: Any?, params: [String: Any]) async throws {
+    guard let chatID = int64Param(params["chat_id"]) else {
+      throw RPCError.invalidParams("chat_id is required")
+    }
+    let limit = intParam(params["limit"]) ?? 50
+    let participants = stringArrayParam(params["participants"])
+    let startISO = stringParam(params["start"])
+    let endISO = stringParam(params["end"])
+    let includeAttachments = boolParam(params["attachments"]) ?? false
+    let filter = try MessageFilter.fromISO(
+      participants: participants,
+      startISO: startISO,
+      endISO: endISO
+    )
+    let filtered = try store.messages(chatID: chatID, limit: max(limit, 1), filter: filter)
+
+    var payloads: [[String: Any]] = []
+    payloads.reserveCapacity(filtered.count)
+    for message in filtered {
+      let payload = try await buildMessagePayload(
+        store: store,
+        cache: cache,
+        message: message,
+        includeAttachments: includeAttachments
+      )
+      payloads.append(payload)
+    }
+
+    respond(id: id, result: ["messages": payloads])
+  }
+
+  private func handleWatchSubscribe(id: Any?, params: [String: Any]) async throws {
+    let chatID = int64Param(params["chat_id"])
+    let sinceRowID = int64Param(params["since_rowid"])
+    let participants = stringArrayParam(params["participants"])
+    let startISO = stringParam(params["start"])
+    let endISO = stringParam(params["end"])
+    let includeAttachments = boolParam(params["attachments"]) ?? false
+    let includeReactions = boolParam(params["include_reactions"]) ?? false
+    let filter = try MessageFilter.fromISO(
+      participants: participants,
+      startISO: startISO,
+      endISO: endISO
+    )
+    let config = MessageWatcherConfiguration(includeReactions: includeReactions)
+    let subID = await subscriptions.allocateID()
+    let localStore = store
+    let localWatcher = watcher
+    let localCache = cache
+    let localWriter = output
+    let localFilter = filter
+    let localChatID = chatID
+    let localSinceRowID = sinceRowID
+    let localConfig = config
+    let localIncludeAttachments = includeAttachments
+    let task = Task {
+      do {
+        for try await message in localWatcher.stream(
+          chatID: localChatID,
+          sinceRowID: localSinceRowID,
+          configuration: localConfig
+        ) {
+          if Task.isCancelled { return }
+          if !localFilter.allows(message) { continue }
+          let payload = try await buildMessagePayload(
+            store: localStore,
+            cache: localCache,
+            message: message,
+            includeAttachments: localIncludeAttachments
+          )
+          localWriter.sendNotification(
+            method: "message",
+            params: ["subscription": subID, "message": payload]
+          )
+        }
+      } catch {
+        localWriter.sendNotification(
+          method: "error",
+          params: [
+            "subscription": subID,
+            "error": ["message": String(describing: error)],
+          ]
+        )
+      }
+    }
+    await subscriptions.insert(task, for: subID)
+    respond(id: id, result: ["subscription": subID])
+  }
+
+  private func handleWatchUnsubscribe(id: Any?, params: [String: Any]) async throws {
+    guard let subID = intParam(params["subscription"]) else {
+      throw RPCError.invalidParams("subscription is required")
+    }
+    if let task = await subscriptions.remove(subID) {
+      task.cancel()
+    }
+    respond(id: id, result: ["ok": true])
+  }
+
+  private func handleSend(params: [String: Any], id: Any?) async throws {
     let text = stringParam(params["text"]) ?? ""
     let file = stringParam(params["file"]) ?? ""
     let serviceRaw = stringParam(params["service"]) ?? "auto"
@@ -241,7 +263,7 @@ final class RPCServer {
     var resolvedChatIdentifier = chatIdentifier
     var resolvedChatGUID = chatGUID
     if let chatID {
-      guard let info = try cache.info(chatID: chatID) else {
+      guard let info = try await cache.info(chatID: chatID) else {
         throw RPCError.invalidParams("unknown chat_id \(chatID)")
       }
       resolvedChatIdentifier = info.identifier
@@ -272,12 +294,12 @@ private func buildMessagePayload(
   cache: ChatCache,
   message: Message,
   includeAttachments: Bool
-) throws -> [String: Any] {
-  let chatInfo = try cache.info(chatID: message.chatID)
-  let participants = try cache.participants(chatID: message.chatID)
+) async throws -> [String: Any] {
+  let chatInfo = try await cache.info(chatID: message.chatID)
+  let participants = try await cache.participants(chatID: message.chatID)
   let attachments = includeAttachments ? try store.attachments(for: message.rowID) : []
   let reactions = includeAttachments ? try store.reactions(for: message.rowID) : []
-  return messagePayload(
+  return try messagePayload(
     message: message,
     chatInfo: chatInfo,
     participants: participants,
@@ -286,7 +308,7 @@ private func buildMessagePayload(
   )
 }
 
-private final class RPCWriter: RPCOutput, @unchecked Sendable {
+private final class RPCWriter: RPCOutput, Sendable {
   func sendResponse(id: Any, result: Any) {
     send(["jsonrpc": "2.0", "id": id, "result": result])
   }
@@ -355,7 +377,33 @@ struct RPCError: Error {
   }
 }
 
-private final class ChatCache: @unchecked Sendable {
+private actor SubscriptionStore {
+  private var nextID = 1
+  private var tasks: [Int: Task<Void, Never>] = [:]
+
+  func allocateID() -> Int {
+    let id = nextID
+    nextID += 1
+    return id
+  }
+
+  func insert(_ task: Task<Void, Never>, for id: Int) {
+    tasks[id] = task
+  }
+
+  func remove(_ id: Int) -> Task<Void, Never>? {
+    tasks.removeValue(forKey: id)
+  }
+
+  func cancelAll() {
+    for task in tasks.values {
+      task.cancel()
+    }
+    tasks.removeAll()
+  }
+}
+
+private actor ChatCache {
   private let store: MessageStore
   private var infoCache: [Int64: ChatInfo] = [:]
   private var participantsCache: [Int64: [String]] = [:]

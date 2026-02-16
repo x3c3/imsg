@@ -62,7 +62,7 @@ struct MessagePayload: Codable {
     self.attachments = attachments.map { AttachmentPayload(meta: $0) }
     self.reactions = reactions.map { ReactionPayload(reaction: $0) }
     self.destinationCallerID = message.destinationCallerID
-    
+
     // Reaction event metadata
     if message.isReaction {
       self.isReaction = true
@@ -98,6 +98,18 @@ struct MessagePayload: Codable {
     case isReactionAdd = "is_reaction_add"
     case reactedToGUID = "reacted_to_guid"
   }
+}
+
+extension MessagePayload {
+  func asDictionary() throws -> [String: Any] {
+    let data = try MessagePayload.encoder.encode(self)
+    let json = try JSONSerialization.jsonObject(with: data)
+    return (json as? [String: Any]) ?? [:]
+  }
+
+  private static let encoder: JSONEncoder = {
+    JSONEncoder()
+  }()
 }
 
 struct ReactionPayload: Codable {
