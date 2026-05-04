@@ -132,6 +132,9 @@ Important:
 - This is opt-in only. Default send/history/watch flows do not need injection.
 - `imsg launch` refuses to inject when SIP is enabled.
 - `imsg status` is read-only and does not auto-launch or auto-inject.
+- macOS 26 can also block Messages.app dylib injection with library validation.
+  In that case `imsg status` reports advanced features unavailable even with SIP
+  disabled; normal send/history/watch commands still work.
 
 Setup:
 1) Disable SIP from Recovery mode: `csrutil disable`

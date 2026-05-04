@@ -41,3 +41,40 @@ func typingIndicatorStopsAfterNormalDuration() async throws {
   #expect(didSleep == true)
   #expect(events == ["start", "stop"])
 }
+
+@Test
+func typingLookupCandidatesExpandAnyPrefixToServiceVariants() {
+  let candidates = TypingIndicator.chatLookupCandidates(for: "any;-;+15551234567")
+
+  #expect(
+    candidates == [
+      "any;-;+15551234567",
+      "+15551234567",
+      "iMessage;-;+15551234567",
+      "iMessage;+;+15551234567",
+      "SMS;-;+15551234567",
+      "SMS;+;+15551234567",
+      "any;+;+15551234567",
+    ])
+}
+
+@Test
+func typingLookupCandidatesAvoidDoublePrefixingDirectIdentifiers() {
+  let candidates = TypingIndicator.chatLookupCandidates(for: " iMessage;-;user@example.com ")
+
+  #expect(
+    candidates == [
+      "iMessage;-;user@example.com",
+      "user@example.com",
+      "iMessage;+;user@example.com",
+      "SMS;-;user@example.com",
+      "SMS;+;user@example.com",
+      "any;-;user@example.com",
+      "any;+;user@example.com",
+    ])
+}
+
+@Test
+func typingLookupCandidatesRejectBlankIdentifier() {
+  #expect(TypingIndicator.chatLookupCandidates(for: "   ").isEmpty)
+}

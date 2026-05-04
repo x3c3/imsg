@@ -197,25 +197,75 @@ public struct TypingIndicator: Sendable {
       throw IMsgError.typingIndicatorFailed("Failed to get IMChatRegistry shared instance")
     }
 
+    let candidates = chatLookupCandidates(for: identifier)
+
     let guidSel = sel_registerName("existingChatWithGUID:")
     if registry.responds(to: guidSel) {
-      if let chat = registry.perform(guidSel, with: identifier)?.takeUnretainedValue() as? NSObject
-      {
-        return chat
+      for candidate in candidates {
+        if let chat = registry.perform(guidSel, with: candidate)?.takeUnretainedValue()
+          as? NSObject
+        {
+          return chat
+        }
       }
     }
 
     let identSel = sel_registerName("existingChatWithChatIdentifier:")
     if registry.responds(to: identSel) {
-      if let chat = registry.perform(identSel, with: identifier)?.takeUnretainedValue() as? NSObject
-      {
-        return chat
+      for candidate in candidates {
+        if let chat = registry.perform(identSel, with: candidate)?.takeUnretainedValue()
+          as? NSObject
+        {
+          return chat
+        }
       }
     }
 
     throw IMsgError.typingIndicatorFailed(
       "Chat not found for identifier: \(identifier). "
         + "Make sure Messages.app has an active conversation with this contact.")
+  }
+
+  static func chatLookupCandidates(for identifier: String) -> [String] {
+    let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return [] }
+
+    let bareIdentifier = stripKnownChatPrefix(trimmed) ?? trimmed
+    var candidates = [trimmed]
+    if bareIdentifier != trimmed {
+      candidates.append(bareIdentifier)
+    }
+    for prefix in chatIdentifierPrefixes {
+      candidates.append(prefix + bareIdentifier)
+    }
+    return dedupe(candidates)
+  }
+
+  private static let chatIdentifierPrefixes = [
+    "iMessage;-;",
+    "iMessage;+;",
+    "SMS;-;",
+    "SMS;+;",
+    "any;-;",
+    "any;+;",
+  ]
+
+  private static func stripKnownChatPrefix(_ value: String) -> String? {
+    for prefix in chatIdentifierPrefixes where value.hasPrefix(prefix) {
+      return String(value.dropFirst(prefix.count))
+    }
+    return nil
+  }
+
+  private static func dedupe(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for value in values where !value.isEmpty {
+      if seen.insert(value).inserted {
+        result.append(value)
+      }
+    }
+    return result
   }
 }
 

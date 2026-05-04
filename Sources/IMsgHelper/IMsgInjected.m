@@ -75,6 +75,19 @@ static NSDictionary* errorResponse(NSInteger requestId, NSString *error) {
 
 #pragma mark - Chat Resolution
 
+static NSArray<NSString *>* chatIdentifierPrefixes(void) {
+    return @[@"iMessage;-;", @"iMessage;+;", @"SMS;-;", @"SMS;+;", @"any;-;", @"any;+;"];
+}
+
+static NSString* stripKnownChatPrefix(NSString *value) {
+    for (NSString *prefix in chatIdentifierPrefixes()) {
+        if ([value hasPrefix:prefix]) {
+            return [value substringFromIndex:prefix.length];
+        }
+    }
+    return nil;
+}
+
 /// Try multiple methods to find a chat, including GUID lookup, chat identifier,
 /// and participant matching with phone number normalization.
 static id findChat(NSString *identifier) {
@@ -91,6 +104,7 @@ static id findChat(NSString *identifier) {
     }
 
     id chat = nil;
+    NSString *bareIdentifier = stripKnownChatPrefix(identifier) ?: identifier;
 
     // Method 1: Try existingChatWithGUID: with the identifier as-is (if it looks like a GUID)
     SEL guidSel = @selector(existingChatWithGUID:);
@@ -104,9 +118,8 @@ static id findChat(NSString *identifier) {
         }
 
         // Try constructing GUIDs with common prefixes (iMessage, SMS, any)
-        NSArray *prefixes = @[@"iMessage;-;", @"iMessage;+;", @"SMS;-;", @"SMS;+;", @"any;-;", @"any;+;"];
-        for (NSString *prefix in prefixes) {
-            NSString *fullGUID = [prefix stringByAppendingString:identifier];
+        for (NSString *prefix in chatIdentifierPrefixes()) {
+            NSString *fullGUID = [prefix stringByAppendingString:bareIdentifier];
             chat = [registry performSelector:guidSel withObject:fullGUID];
             if (chat) {
                 NSLog(@"[imsg-bridge] Found chat via existingChatWithGUID: %@", fullGUID);
@@ -123,6 +136,13 @@ static id findChat(NSString *identifier) {
             NSLog(@"[imsg-bridge] Found chat via existingChatWithChatIdentifier: %@", identifier);
             return chat;
         }
+        if (![bareIdentifier isEqualToString:identifier]) {
+            chat = [registry performSelector:identSel withObject:bareIdentifier];
+            if (chat) {
+                NSLog(@"[imsg-bridge] Found chat via existingChatWithChatIdentifier: %@", bareIdentifier);
+                return chat;
+            }
+        }
     }
 
     // Method 3: Iterate all chats and match by participant
@@ -138,12 +158,13 @@ static id findChat(NSString *identifier) {
 
         // Normalize the search identifier for phone number matching
         NSString *normalizedIdentifier = nil;
-        if ([identifier hasPrefix:@"+"] || [identifier hasPrefix:@"1"] ||
+        if (bareIdentifier.length > 0 &&
+            ([bareIdentifier hasPrefix:@"+"] || [bareIdentifier hasPrefix:@"1"] ||
             [[NSCharacterSet decimalDigitCharacterSet]
-             characterIsMember:[identifier characterAtIndex:0]]) {
+             characterIsMember:[bareIdentifier characterAtIndex:0]])) {
             NSMutableString *digits = [NSMutableString string];
-            for (NSUInteger i = 0; i < identifier.length; i++) {
-                unichar c = [identifier characterAtIndex:i];
+            for (NSUInteger i = 0; i < bareIdentifier.length; i++) {
+                unichar c = [bareIdentifier characterAtIndex:i];
                 if ([[NSCharacterSet decimalDigitCharacterSet] characterIsMember:c]) {
                     [digits appendFormat:@"%C", c];
                 }
@@ -155,7 +176,8 @@ static id findChat(NSString *identifier) {
             // Check GUID
             if ([aChat respondsToSelector:@selector(guid)]) {
                 NSString *chatGUID = [aChat performSelector:@selector(guid)];
-                if ([chatGUID isEqualToString:identifier]) {
+                if ([chatGUID isEqualToString:identifier] ||
+                    [chatGUID isEqualToString:bareIdentifier]) {
                     NSLog(@"[imsg-bridge] Found chat by GUID exact match: %@", chatGUID);
                     return aChat;
                 }
@@ -164,7 +186,8 @@ static id findChat(NSString *identifier) {
             // Check chatIdentifier
             if ([aChat respondsToSelector:@selector(chatIdentifier)]) {
                 NSString *chatId = [aChat performSelector:@selector(chatIdentifier)];
-                if ([chatId isEqualToString:identifier]) {
+                if ([chatId isEqualToString:identifier] ||
+                    [chatId isEqualToString:bareIdentifier]) {
                     NSLog(@"[imsg-bridge] Found chat by chatIdentifier exact match: %@", chatId);
                     return aChat;
                 }
@@ -177,7 +200,8 @@ static id findChat(NSString *identifier) {
                 for (id handle in participants) {
                     if ([handle respondsToSelector:@selector(ID)]) {
                         NSString *handleID = [handle performSelector:@selector(ID)];
-                        if ([handleID isEqualToString:identifier]) {
+                        if ([handleID isEqualToString:identifier] ||
+                            [handleID isEqualToString:bareIdentifier]) {
                             NSLog(@"[imsg-bridge] Found chat by participant exact match: %@", handleID);
                             return aChat;
                         }

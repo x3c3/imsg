@@ -19,9 +19,8 @@
 - fix: confirm standard tapback reaction selection in Messages automation (#53, thanks @PeterRosdahl)
 - fix: gate RPC watch reaction metadata on `include_reactions`, not `attachments` (#82)
 - fix: dedupe URL balloon preview duplicates in watch stream without cross-chat/schema regressions (#64, thanks @lesaai)
-- fix: remove non-functional `typing` command and related RPC methods
-- fix: remove unsupported standalone IMCore typing path and stale error branch
-- test: drop typing-specific unit/integration tests with command/RPC surface removal
+- fix: normalize IMCore typing chat lookup across `iMessage`, `SMS`, and `any` prefixes (#51, #54, #56, #58)
+- docs: document macOS 26 advanced IMCore injection limits (#60)
 
 ## 0.5.0 - 2026-02-16
 
