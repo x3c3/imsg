@@ -10,7 +10,7 @@ A macOS Messages.app CLI to send, read, and stream iMessage/SMS (with attachment
 - Optional attachment metadata output (mime, name, path, missing flag).
 - Filters: participants, start/end time, JSON output for tooling.
 - Read-only DB access (`mode=ro`), no DB writes.
-- Event-driven watch via filesystem events.
+- Event-driven watch via filesystem events, with a fallback poll for missed file events.
 - Optional advanced IMCore features (`typing`, `launch`, `status`) behind explicit SIP-off setup.
 
 ## Requirements
@@ -96,6 +96,16 @@ imsg typing --to "+14155551212" --duration 5s
 `imsg` copies it under `~/Library/Messages/Attachments/imsg/` so Messages can
 read it reliably. Sending still requires macOS Automation permission for the
 calling terminal or parent app to control Messages.app.
+
+## Watch notes
+`imsg watch` starts at the newest message by default and streams messages written
+after it starts. Use `--since-rowid <id>` to replay from a known cursor.
+
+The watcher listens for filesystem events on `chat.db`, `chat.db-wal`, and
+`chat.db-shm`, and also performs a lightweight fallback poll so missed macOS file
+events do not leave the stream silent. Watching only needs Full Disk Access for
+the calling terminal or parent app; Automation permission is only needed for
+send/read/typing/reaction commands that control Messages.app.
 
 ## JSON output
 `imsg chats --json` emits one JSON object per chat with fields: `id`, `name`, `identifier`, `service`, `last_message_at`, `guid`, `display_name`, `is_group`, `participants`.
