@@ -50,13 +50,17 @@ enum HistoryCommand {
 
     if runtime.jsonOutput {
       let cache = ChatCache(store: store)
+      let attachmentsByMessageID = try store.attachments(for: filtered.map(\.rowID))
+      let reactionsByMessageID = try store.reactions(for: filtered)
       for message in filtered {
         let payload = try await buildMessagePayload(
           store: store,
           cache: cache,
           message: message,
           includeAttachments: true,
-          includeReactions: true
+          includeReactions: true,
+          prefetchedAttachments: attachmentsByMessageID[message.rowID] ?? [],
+          prefetchedReactions: reactionsByMessageID[message.rowID] ?? []
         )
         try JSONLines.printObject(payload)
       }

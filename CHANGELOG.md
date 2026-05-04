@@ -3,6 +3,7 @@
 ## Unreleased
 - feat: add `imsg group` chat metadata lookup and group fields to `chats --json` (#88, thanks @mryanb)
 - fix: speed up chat listing by using `chat_message_join.message_date` when available (#76, thanks @tmad4000)
+- fix: speed up JSON history metadata lookups by batching attachments and reactions (#81, thanks @kacy)
 - docs: clarify stale Full Disk Access and Terminal.app troubleshooting (#28, #32, #33, #83)
 - fix: publish universal macOS release binaries for Homebrew installs (#68, #79)
 - fix: include group metadata in CLI JSON history/watch output (#57, thanks @clawbunny)

@@ -188,12 +188,24 @@ func buildMessagePayload(
   cache: ChatCache,
   message: Message,
   includeAttachments: Bool,
-  includeReactions: Bool
+  includeReactions: Bool,
+  prefetchedAttachments: [AttachmentMeta]? = nil,
+  prefetchedReactions: [Reaction]? = nil
 ) async throws -> [String: Any] {
   let chatInfo = try await cache.info(chatID: message.chatID)
   let participants = try await cache.participants(chatID: message.chatID)
-  let attachments = includeAttachments ? try store.attachments(for: message.rowID) : []
-  let reactions = includeReactions ? try store.reactions(for: message.rowID) : []
+  let attachments: [AttachmentMeta]
+  if includeAttachments {
+    attachments = try prefetchedAttachments ?? store.attachments(for: message.rowID)
+  } else {
+    attachments = []
+  }
+  let reactions: [Reaction]
+  if includeReactions {
+    reactions = try prefetchedReactions ?? store.reactions(for: message.rowID)
+  } else {
+    reactions = []
+  }
   return try messagePayload(
     message: message,
     chatInfo: chatInfo,
