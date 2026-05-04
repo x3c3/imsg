@@ -172,18 +172,27 @@ extension RPCServer {
       throw RPCError.invalidParams("missing chat identifier or guid")
     }
 
-    try sendMessage(
-      MessageSendOptions(
-        recipient: input.recipient,
-        text: text,
-        attachmentPath: file,
-        service: service,
-        region: region,
-        chatIdentifier: resolvedTarget.chatIdentifier,
-        chatGUID: resolvedTarget.chatGUID
-      )
+    let options = MessageSendOptions(
+      recipient: input.recipient,
+      text: text,
+      attachmentPath: file,
+      service: service,
+      region: region,
+      chatIdentifier: resolvedTarget.chatIdentifier,
+      chatGUID: resolvedTarget.chatGUID
     )
-    respond(id: id, result: ["ok": true])
+    let sentAt = Date()
+    try sendMessage(options)
+
+    let sentMessage = try? await resolveSentMessage(store, options, input.chatID, sentAt)
+    var result: [String: Any] = ["ok": true]
+    if let sentMessage {
+      result["id"] = sentMessage.rowID
+      if !sentMessage.guid.isEmpty {
+        result["guid"] = sentMessage.guid
+      }
+    }
+    respond(id: id, result: result)
   }
 }
 

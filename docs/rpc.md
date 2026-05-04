@@ -67,7 +67,12 @@ Params (group):
 - `text` / `file` as above
 
 Result:
-- `{ "ok": true }`
+- `{ "ok": true, "id": 1979, "guid": "8DF..." }`
+
+`id` and `guid` are best-effort. `send` returns them when the sent row can be
+observed in `chat.db` after Messages accepts the send. Attachment-only sends,
+delayed database writes, or ambiguous direct sends may still return only
+`{ "ok": true }`.
 
 ## Objects
 

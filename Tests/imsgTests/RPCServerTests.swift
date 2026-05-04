@@ -89,7 +89,8 @@ func rpcSendResolvesChatID() async throws {
     store: store,
     verbose: false,
     output: output,
-    sendMessage: { options in captured = options }
+    sendMessage: { options in captured = options },
+    resolveSentMessage: { _, _, _, _ in nil }
   )
 
   let line = #"{"jsonrpc":"2.0","id":"3","method":"send","params":{"chat_id":1,"text":"yo"}}"#
@@ -99,6 +100,61 @@ func rpcSendResolvesChatID() async throws {
   #expect(captured?.chatGUID == "iMessage;+;chat123")
   #expect(captured?.recipient.isEmpty == true)
   #expect(output.responses.first?["result"] as? [String: Any] != nil)
+}
+
+@Test
+func rpcSendReturnsSentMessageIdentifiersWhenResolved() async throws {
+  let store = try CommandTestDatabase.makeStoreForRPC()
+  let output = TestRPCOutput()
+  let server = RPCServer(
+    store: store,
+    verbose: false,
+    output: output,
+    sendMessage: { _ in },
+    resolveSentMessage: { _, options, chatID, _ in
+      Message(
+        rowID: 1_979,
+        chatID: chatID ?? 0,
+        sender: "me@icloud.com",
+        text: options.text,
+        date: Date(),
+        isFromMe: true,
+        service: "iMessage",
+        handleID: nil,
+        attachmentsCount: 0,
+        guid: "8DF1B3D7"
+      )
+    }
+  )
+
+  let line = #"{"jsonrpc":"2.0","id":"3b","method":"send","params":{"chat_id":1,"text":"yo"}}"#
+  await server.handleLineForTesting(line)
+
+  let result = output.responses.first?["result"] as? [String: Any]
+  #expect(result?["ok"] as? Bool == true)
+  #expect(int64Value(result?["id"]) == 1_979)
+  #expect(result?["guid"] as? String == "8DF1B3D7")
+}
+
+@Test
+func rpcSendKeepsOkResponseWhenSentMessageIsNotResolved() async throws {
+  let store = try CommandTestDatabase.makeStoreForRPC()
+  let output = TestRPCOutput()
+  let server = RPCServer(
+    store: store,
+    verbose: false,
+    output: output,
+    sendMessage: { _ in },
+    resolveSentMessage: { _, _, _, _ in nil }
+  )
+
+  let line = #"{"jsonrpc":"2.0","id":"3c","method":"send","params":{"chat_id":1,"text":"yo"}}"#
+  await server.handleLineForTesting(line)
+
+  let result = output.responses.first?["result"] as? [String: Any]
+  #expect(result?["ok"] as? Bool == true)
+  #expect(result?["id"] == nil)
+  #expect(result?["guid"] == nil)
 }
 
 @Test

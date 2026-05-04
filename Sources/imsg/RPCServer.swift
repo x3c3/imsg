@@ -1,6 +1,13 @@
 import Foundation
 import IMsgCore
 
+typealias SentMessageResolver = (
+  _ store: MessageStore,
+  _ options: MessageSendOptions,
+  _ chatID: Int64?,
+  _ sentAt: Date
+) async throws -> Message?
+
 protocol RPCOutput: Sendable {
   func sendResponse(id: Any, result: Any)
   func sendError(id: Any?, error: RPCError)
@@ -15,12 +22,14 @@ final class RPCServer {
   let subscriptions = SubscriptionStore()
   let verbose: Bool
   let sendMessage: (MessageSendOptions) throws -> Void
+  let resolveSentMessage: SentMessageResolver
 
   init(
     store: MessageStore,
     verbose: Bool,
     output: RPCOutput = RPCWriter(),
-    sendMessage: @escaping (MessageSendOptions) throws -> Void = { try MessageSender().send($0) }
+    sendMessage: @escaping (MessageSendOptions) throws -> Void = { try MessageSender().send($0) },
+    resolveSentMessage: @escaping SentMessageResolver = RPCServer.resolveSentMessage
   ) {
     self.store = store
     self.watcher = MessageWatcher(store: store)
@@ -28,6 +37,7 @@ final class RPCServer {
     self.verbose = verbose
     self.output = output
     self.sendMessage = sendMessage
+    self.resolveSentMessage = resolveSentMessage
   }
 
   func run() async throws {
@@ -106,5 +116,29 @@ final class RPCServer {
     } catch {
       output.sendError(id: id, error: RPCError.internalError(error.localizedDescription))
     }
+  }
+
+  static func resolveSentMessage(
+    store: MessageStore,
+    options: MessageSendOptions,
+    chatID: Int64?,
+    sentAt: Date
+  ) async throws -> Message? {
+    guard !options.text.isEmpty else { return nil }
+
+    let lowerBound = sentAt.addingTimeInterval(-2)
+    let deadline = Date().addingTimeInterval(2)
+    repeat {
+      if Task.isCancelled { return nil }
+      if let message = try store.latestSentMessage(
+        matchingText: options.text,
+        chatID: chatID,
+        since: lowerBound
+      ) {
+        return message
+      }
+      try await Task.sleep(nanoseconds: 100_000_000)
+    } while Date() < deadline
+    return nil
   }
 }
