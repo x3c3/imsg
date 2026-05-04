@@ -22,9 +22,10 @@ public enum IMsgError: LocalizedError, Sendable {
 
         To fix:
         1. Open System Settings → Privacy & Security → Full Disk Access
-        2. Add your terminal application (Terminal.app, iTerm, etc.)
-        3. Restart your terminal
-        4. Try again
+        2. Add your terminal application and any parent launcher (VS Code, Node, gateway, etc.)
+        3. Also add the built-in Terminal.app if you normally use another terminal
+        4. Toggle stale entries off and on after terminal/Homebrew/app updates
+        5. Restart the terminal or parent app, then try again
 
         Note: This is required because macOS protects the Messages database.
         For more details, see: https://github.com/steipete/imsg#permissions-troubleshooting

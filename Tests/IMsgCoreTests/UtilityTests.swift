@@ -326,4 +326,7 @@ func errorDescriptionsIncludeDetails() {
   let permissionDescription = permission.errorDescription ?? ""
   #expect(permissionDescription.contains("Permission Error") == true)
   #expect(permissionDescription.contains("/tmp/chat.db") == true)
+  #expect(permissionDescription.contains("parent launcher") == true)
+  #expect(permissionDescription.contains("built-in Terminal.app") == true)
+  #expect(permissionDescription.contains("stale entries") == true)
 }

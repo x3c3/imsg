@@ -92,8 +92,13 @@ Note: `reply_to_guid`, `destination_caller_id`, and `reactions` are read-only me
 ## Permissions troubleshooting
 If you see “unable to open database file” or empty output:
 1) Grant Full Disk Access: System Settings → Privacy & Security → Full Disk Access → add your terminal.
-2) Ensure Messages.app is signed in and `~/Library/Messages/chat.db` exists.
-3) For send, allow the terminal under System Settings → Privacy & Security → Automation → Messages.
+2) If you launch `imsg` from an editor, Node process, gateway, or shell wrapper, grant Full Disk Access to that parent app too.
+3) Also add the built-in Terminal.app (`/System/Applications/Utilities/Terminal.app`). macOS can require the default terminal even when you normally use iTerm, VS Code, or another launcher.
+4) Toggle the Full Disk Access entry off and on after terminal, Homebrew, Node, or app updates; stale TCC grants can look enabled but still produce `authorization denied (code: 23)`.
+5) Ensure Messages.app is signed in and `~/Library/Messages/chat.db` exists.
+6) For send, allow the terminal under System Settings → Privacy & Security → Automation → Messages.
+
+`imsg` opens `chat.db` read-only. It does not use SQLite `immutable=1` by default because immutable reads can miss new Messages rows and WAL-backed updates.
 
 ## Advanced Features (SIP-Off Only)
 Advanced features (`typing`, `launch`, IMCore bridge) require injecting a helper dylib into `Messages.app`.
