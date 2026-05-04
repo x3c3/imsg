@@ -103,6 +103,15 @@ func typedStreamParserTrimsControlCharacters() {
 }
 
 @Test
+func typedStreamParserDecodesUTF16LittleEndianBOM() throws {
+  var data = Data([0xff, 0xfe])
+  let body = "hello 🌤️"
+  let encoded = try #require(body.data(using: .utf16LittleEndian))
+  data.append(encoded)
+  #expect(TypedStreamParser.parseAttributedBody(data) == body)
+}
+
+@Test
 func phoneNumberNormalizerFormatsValidNumber() {
   let normalizer = PhoneNumberNormalizer()
   let normalized = normalizer.normalize("+1 650-253-0000", region: "US")

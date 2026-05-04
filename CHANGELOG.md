@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- fix: decode UTF-16LE BOM attributed message bodies in plain-text history output (#91, thanks @clawbunny)
 - fix: confirm standard tapback reaction selection in Messages automation (#53, thanks @PeterRosdahl)
 - fix: gate RPC watch reaction metadata on `include_reactions`, not `attachments` (#82)
 - fix: dedupe URL balloon preview duplicates in watch stream without cross-chat/schema regressions (#64, thanks @lesaai)
