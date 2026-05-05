@@ -10,8 +10,9 @@ extension MessageStore {
     let sql: String
     if hasChatMessageJoinMessageDateColumn {
       sql = """
-        SELECT c.ROWID, IFNULL(c.display_name, c.chat_identifier) AS name, c.chat_identifier,
-               c.service_name, MAX(cmj.message_date) AS last_date,
+        SELECT c.ROWID AS chat_rowid, IFNULL(c.display_name, c.chat_identifier) AS name,
+               c.chat_identifier AS chat_identifier, c.service_name AS service_name,
+               MAX(cmj.message_date) AS last_date,
                \(accountIDColumn) AS account_id,
                \(accountLoginColumn) AS account_login,
                \(lastAddressedHandleColumn) AS last_addressed_handle
@@ -23,8 +24,9 @@ extension MessageStore {
         """
     } else {
       sql = """
-        SELECT c.ROWID, IFNULL(c.display_name, c.chat_identifier) AS name, c.chat_identifier,
-               c.service_name, MAX(m.date) AS last_date,
+        SELECT c.ROWID AS chat_rowid, IFNULL(c.display_name, c.chat_identifier) AS name,
+               c.chat_identifier AS chat_identifier, c.service_name AS service_name,
+               MAX(m.date) AS last_date,
                \(accountIDColumn) AS account_id,
                \(accountLoginColumn) AS account_login,
                \(lastAddressedHandleColumn) AS last_addressed_handle
@@ -38,17 +40,18 @@ extension MessageStore {
     }
     return try withConnection { db in
       var chats: [Chat] = []
-      for row in try db.prepare(sql, limit) {
+      let rows = try db.prepareRowIterator(sql, bindings: [limit])
+      while let row = try rows.failableNext() {
         chats.append(
           Chat(
-            id: int64Value(row[0]) ?? 0,
-            identifier: stringValue(row[2]),
-            name: stringValue(row[1]),
-            service: stringValue(row[3]),
-            lastMessageAt: appleDate(from: int64Value(row[4])),
-            accountID: stringValue(row[5]).nilIfEmpty,
-            accountLogin: stringValue(row[6]).nilIfEmpty,
-            lastAddressedHandle: stringValue(row[7]).nilIfEmpty
+            id: try int64Value(row, "chat_rowid") ?? 0,
+            identifier: try stringValue(row, "chat_identifier"),
+            name: try stringValue(row, "name"),
+            service: try stringValue(row, "service_name"),
+            lastMessageAt: try appleDate(from: int64Value(row, "last_date")),
+            accountID: try stringValue(row, "account_id").nilIfEmpty,
+            accountLogin: try stringValue(row, "account_login").nilIfEmpty,
+            lastAddressedHandle: try stringValue(row, "last_addressed_handle").nilIfEmpty
           ))
       }
       return chats
@@ -61,7 +64,7 @@ extension MessageStore {
     let lastAddressedHandleColumn =
       hasChatLastAddressedHandleColumn ? "IFNULL(c.last_addressed_handle, '')" : "''"
     let sql = """
-      SELECT c.ROWID, IFNULL(c.chat_identifier, '') AS identifier, IFNULL(c.guid, '') AS guid,
+      SELECT c.ROWID AS chat_rowid, IFNULL(c.chat_identifier, '') AS identifier, IFNULL(c.guid, '') AS guid,
              IFNULL(c.display_name, c.chat_identifier) AS name, IFNULL(c.service_name, '') AS service,
              \(accountIDColumn) AS account_id,
              \(accountLoginColumn) AS account_login,
@@ -71,16 +74,17 @@ extension MessageStore {
       LIMIT 1
       """
     return try withConnection { db in
-      for row in try db.prepare(sql, chatID) {
+      let rows = try db.prepareRowIterator(sql, bindings: [chatID])
+      while let row = try rows.failableNext() {
         return ChatInfo(
-          id: int64Value(row[0]) ?? 0,
-          identifier: stringValue(row[1]),
-          guid: stringValue(row[2]),
-          name: stringValue(row[3]),
-          service: stringValue(row[4]),
-          accountID: stringValue(row[5]).nilIfEmpty,
-          accountLogin: stringValue(row[6]).nilIfEmpty,
-          lastAddressedHandle: stringValue(row[7]).nilIfEmpty
+          id: try int64Value(row, "chat_rowid") ?? 0,
+          identifier: try stringValue(row, "identifier"),
+          guid: try stringValue(row, "guid"),
+          name: try stringValue(row, "name"),
+          service: try stringValue(row, "service"),
+          accountID: try stringValue(row, "account_id").nilIfEmpty,
+          accountLogin: try stringValue(row, "account_login").nilIfEmpty,
+          lastAddressedHandle: try stringValue(row, "last_addressed_handle").nilIfEmpty
         )
       }
       return nil
@@ -98,8 +102,9 @@ extension MessageStore {
     return try withConnection { db in
       var results: [String] = []
       var seen = Set<String>()
-      for row in try db.prepare(sql, chatID) {
-        let handle = stringValue(row[0])
+      let rows = try db.prepareRowIterator(sql, bindings: [chatID])
+      while let row = try rows.failableNext() {
+        let handle = try stringValue(row, "id")
         if handle.isEmpty { continue }
         if seen.insert(handle).inserted {
           results.append(handle)

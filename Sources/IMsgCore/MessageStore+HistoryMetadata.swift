@@ -18,7 +18,9 @@ extension MessageStore {
       let batch = Array(uniqueIDs[start..<end])
       let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
       let sql = """
-        SELECT maj.message_id, a.filename, a.transfer_name, a.uti, a.mime_type, a.total_bytes, a.is_sticker
+        SELECT maj.message_id AS message_id, a.filename AS filename,
+               a.transfer_name AS transfer_name, a.uti AS uti, a.mime_type AS mime_type,
+               a.total_bytes AS total_bytes, a.is_sticker AS is_sticker
         FROM message_attachment_join maj
         JOIN attachment a ON a.ROWID = maj.attachment_id
         WHERE maj.message_id IN (\(placeholders))
@@ -26,14 +28,15 @@ extension MessageStore {
         """
       let bindings: [Binding?] = batch.map { $0 }
       try withConnection { db in
-        for row in try db.prepare(sql, bindings) {
-          let messageID = int64Value(row[0]) ?? 0
-          let filename = stringValue(row[1])
-          let transferName = stringValue(row[2])
-          let uti = stringValue(row[3])
-          let mimeType = stringValue(row[4])
-          let totalBytes = int64Value(row[5]) ?? 0
-          let isSticker = boolValue(row[6])
+        let rows = try db.prepareRowIterator(sql, bindings: bindings)
+        while let row = try rows.failableNext() {
+          let messageID = try int64Value(row, "message_id") ?? 0
+          let filename = try stringValue(row, "filename")
+          let transferName = try stringValue(row, "transfer_name")
+          let uti = try stringValue(row, "uti")
+          let mimeType = try stringValue(row, "mime_type")
+          let totalBytes = try int64Value(row, "total_bytes") ?? 0
+          let isSticker = try boolValue(row, "is_sticker")
           metasByMessageID[messageID, default: []].append(
             AttachmentResolver.metadata(
               filename: filename,
@@ -88,8 +91,10 @@ extension MessageStore {
     ).joined(separator: " OR ")
     let bodyColumn = hasAttributedBody ? "r.attributedBody" : "NULL"
     let sql = """
-      SELECT r.ROWID, r.associated_message_guid, r.associated_message_type, h.id, r.is_from_me,
-             r.date, IFNULL(r.text, '') AS text, \(bodyColumn) AS body
+      SELECT r.ROWID AS reaction_rowid, r.associated_message_guid AS associated_message_guid,
+             r.associated_message_type AS associated_message_type, h.id AS sender,
+             r.is_from_me AS is_from_me, r.date AS date, IFNULL(r.text, '') AS text,
+             \(bodyColumn) AS body
       FROM message r
       LEFT JOIN handle h ON r.handle_id = h.ROWID
       WHERE r.associated_message_guid IS NOT NULL
@@ -105,18 +110,19 @@ extension MessageStore {
     let bindings: [Binding?] = guids.map { $0 } + guids.map { "%/\($0)" }
 
     try withConnection { db in
-      for row in try db.prepare(sql, bindings) {
-        let associatedGUID = stringValue(row[1])
+      let rows = try db.prepareRowIterator(sql, bindings: bindings)
+      while let row = try rows.failableNext() {
+        let associatedGUID = try stringValue(row, "associated_message_guid")
         let baseGUID = baseAssociatedMessageGUID(from: associatedGUID)
         guard let messageID = messageIDByGUID[baseGUID] else { continue }
 
-        let rowID = int64Value(row[0]) ?? 0
-        let typeValue = intValue(row[2]) ?? 0
-        let sender = stringValue(row[3])
-        let isFromMe = boolValue(row[4])
-        let date = appleDate(from: int64Value(row[5]))
-        let text = stringValue(row[6])
-        let body = dataValue(row[7])
+        let rowID = try int64Value(row, "reaction_rowid") ?? 0
+        let typeValue = try intValue(row, "associated_message_type") ?? 0
+        let sender = try stringValue(row, "sender")
+        let isFromMe = try boolValue(row, "is_from_me")
+        let date = try appleDate(from: int64Value(row, "date"))
+        let text = try stringValue(row, "text")
+        let body = try dataValue(row, "body")
         let resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
 
         var reactions = reactionsByMessageID[messageID, default: []]

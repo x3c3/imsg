@@ -210,20 +210,22 @@ extension MessageStore {
     options: AttachmentQueryOptions = .default
   ) throws -> [AttachmentMeta] {
     let sql = """
-      SELECT a.filename, a.transfer_name, a.uti, a.mime_type, a.total_bytes, a.is_sticker
+      SELECT a.filename AS filename, a.transfer_name AS transfer_name, a.uti AS uti,
+             a.mime_type AS mime_type, a.total_bytes AS total_bytes, a.is_sticker AS is_sticker
       FROM message_attachment_join maj
       JOIN attachment a ON a.ROWID = maj.attachment_id
       WHERE maj.message_id = ?
       """
     return try withConnection { db in
       var metas: [AttachmentMeta] = []
-      for row in try db.prepare(sql, messageID) {
-        let filename = stringValue(row[0])
-        let transferName = stringValue(row[1])
-        let uti = stringValue(row[2])
-        let mimeType = stringValue(row[3])
-        let totalBytes = int64Value(row[4]) ?? 0
-        let isSticker = boolValue(row[5])
+      let rows = try db.prepareRowIterator(sql, bindings: [messageID])
+      while let row = try rows.failableNext() {
+        let filename = try stringValue(row, "filename")
+        let transferName = try stringValue(row, "transfer_name")
+        let uti = try stringValue(row, "uti")
+        let mimeType = try stringValue(row, "mime_type")
+        let totalBytes = try int64Value(row, "total_bytes") ?? 0
+        let isSticker = try boolValue(row, "is_sticker")
         metas.append(
           AttachmentResolver.metadata(
             filename: filename,
@@ -249,8 +251,9 @@ extension MessageStore {
       LIMIT 1
       """
     return try withConnection { db in
-      for row in try db.prepare(sql, messageID) {
-        let info = dataValue(row[0])
+      let rows = try db.prepareRowIterator(sql, bindings: [messageID])
+      while let row = try rows.failableNext() {
+        let info = try dataValue(row, "user_info")
         guard !info.isEmpty else { continue }
         if let transcription = parseAudioTranscription(from: info) {
           return transcription
@@ -295,7 +298,8 @@ extension MessageStore {
     // where X is the part index (0 for single-part messages) and GUID matches the original message's guid
     let bodyColumn = hasAttributedBody ? "r.attributedBody" : "NULL"
     let sql = """
-      SELECT r.ROWID, r.associated_message_type, h.id, r.is_from_me, r.date, IFNULL(r.text, '') as text,
+      SELECT r.ROWID AS reaction_rowid, r.associated_message_type AS associated_message_type,
+             h.id AS sender, r.is_from_me AS is_from_me, r.date AS date, IFNULL(r.text, '') AS text,
              \(bodyColumn) AS body
       FROM message m
       JOIN message r ON r.associated_message_guid = m.guid
@@ -311,14 +315,15 @@ extension MessageStore {
     return try withConnection { db in
       var reactions: [Reaction] = []
       var reactionIndex: [ReactionKey: Int] = [:]
-      for row in try db.prepare(sql, messageID) {
-        let rowID = int64Value(row[0]) ?? 0
-        let typeValue = intValue(row[1]) ?? 0
-        let sender = stringValue(row[2])
-        let isFromMe = boolValue(row[3])
-        let date = appleDate(from: int64Value(row[4]))
-        let text = stringValue(row[5])
-        let body = dataValue(row[6])
+      let rows = try db.prepareRowIterator(sql, bindings: [messageID])
+      while let row = try rows.failableNext() {
+        let rowID = try int64Value(row, "reaction_rowid") ?? 0
+        let typeValue = try intValue(row, "associated_message_type") ?? 0
+        let sender = try stringValue(row, "sender")
+        let isFromMe = try boolValue(row, "is_from_me")
+        let date = try appleDate(from: int64Value(row, "date"))
+        let text = try stringValue(row, "text")
+        let body = try dataValue(row, "body")
         let resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
 
         if ReactionType.isReactionRemove(typeValue) {

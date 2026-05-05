@@ -12,7 +12,7 @@ extension MessageStore {
     let lastAddressedHandleColumn =
       hasChatLastAddressedHandleColumn ? "IFNULL(c.last_addressed_handle, '')" : "''"
     let sql = """
-      SELECT c.ROWID, IFNULL(c.chat_identifier, '') AS identifier, IFNULL(c.guid, '') AS guid,
+      SELECT c.ROWID AS chat_rowid, IFNULL(c.chat_identifier, '') AS identifier, IFNULL(c.guid, '') AS guid,
              IFNULL(c.display_name, c.chat_identifier) AS name, IFNULL(c.service_name, '') AS service,
              \(accountIDColumn) AS account_id,
              \(accountLoginColumn) AS account_login,
@@ -24,16 +24,17 @@ extension MessageStore {
       """
     let bindings: [Binding?] = candidates + candidates
     return try withConnection { db in
-      guard let row = try db.prepare(sql, bindings).makeIterator().next() else { return nil }
+      let rows = try db.prepareRowIterator(sql, bindings: bindings)
+      guard let row = try rows.failableNext() else { return nil }
       return ChatInfo(
-        id: int64Value(row[0]) ?? 0,
-        identifier: stringValue(row[1]),
-        guid: stringValue(row[2]),
-        name: stringValue(row[3]),
-        service: stringValue(row[4]),
-        accountID: stringValue(row[5]).nilIfEmpty,
-        accountLogin: stringValue(row[6]).nilIfEmpty,
-        lastAddressedHandle: stringValue(row[7]).nilIfEmpty
+        id: try int64Value(row, "chat_rowid") ?? 0,
+        identifier: try stringValue(row, "identifier"),
+        guid: try stringValue(row, "guid"),
+        name: try stringValue(row, "name"),
+        service: try stringValue(row, "service"),
+        accountID: try stringValue(row, "account_id").nilIfEmpty,
+        accountLogin: try stringValue(row, "account_login").nilIfEmpty,
+        lastAddressedHandle: try stringValue(row, "last_addressed_handle").nilIfEmpty
       )
     }
   }
@@ -47,7 +48,7 @@ extension MessageStore {
 
     let placeholders = Array(repeating: "?", count: candidates.count).joined(separator: ",")
     let sql = """
-      SELECT m.ROWID
+      SELECT m.ROWID AS message_rowid
       FROM message m
       LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
       LEFT JOIN handle h ON h.ROWID = m.handle_id
@@ -61,8 +62,9 @@ extension MessageStore {
       """
     let bindings: [Binding?] = [MessageStore.appleEpoch(date)] + candidates
     return try withConnection { db in
-      guard let row = try db.prepare(sql, bindings).makeIterator().next() else { return nil }
-      return int64Value(row[0])
+      let rows = try db.prepareRowIterator(sql, bindings: bindings)
+      guard let row = try rows.failableNext() else { return nil }
+      return try int64Value(row, "message_rowid")
     }
   }
 

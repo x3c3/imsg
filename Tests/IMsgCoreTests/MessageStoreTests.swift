@@ -49,6 +49,19 @@ func chatInfoReturnsMetadata() throws {
 }
 
 @Test
+func sqlRowDecodingThrowsWhenRequiredAliasIsMissing() throws {
+  let db = try Connection(.inMemory)
+  let store = try MessageStore(connection: db, path: ":memory:")
+  try store.withConnection { db in
+    let rows = try db.prepareRowIterator("SELECT 1 AS actual_value")
+    let row = try #require(try rows.failableNext())
+    #expect(throws: (any Error).self) {
+      _ = try store.int64Value(row, "expected_value")
+    }
+  }
+}
+
+@Test
 func participantsReturnsUniqueHandles() throws {
   let db = try Connection(.inMemory)
   try db.execute(
