@@ -17,6 +17,14 @@ export function css() {
   --code-bg:#1d1d1f;
   --code-fg:#f5f5f7;
   --code-inline-fg:#1d1d1f;
+  --hl-comment:#9ca3af;
+  --hl-keyword:#93c5fd;
+  --hl-string:#86efac;
+  --hl-number:#fbbf24;
+  --hl-literal:#c4b5fd;
+  --hl-key:#67e8f9;
+  --hl-variable:#f0abfc;
+  --hl-option:#fda4af;
   --pill-border:#d2d2d7;
   --shadow-card:0 1px 2px rgba(0,0,0,.04),0 6px 24px rgba(0,0,0,.06);
   --scrollbar:#c7c7cc;
@@ -41,6 +49,14 @@ export function css() {
   --code-bg:#0a0a0a;
   --code-fg:#f5f5f7;
   --code-inline-fg:#f5f5f7;
+  --hl-comment:#8b949e;
+  --hl-keyword:#79c0ff;
+  --hl-string:#a5d6ff;
+  --hl-number:#ffa657;
+  --hl-literal:#d2a8ff;
+  --hl-key:#7ee787;
+  --hl-variable:#ff7b72;
+  --hl-option:#f2cc60;
   --pill-border:#2c2c2e;
   --shadow-card:0 1px 2px rgba(0,0,0,.4),0 8px 28px rgba(0,0,0,.5);
   --scrollbar:#3a3a3c;
@@ -133,6 +149,14 @@ body:not(.home) .doc>h1:first-child{display:none}
 .doc pre::-webkit-scrollbar{height:8px;width:8px}
 .doc pre::-webkit-scrollbar-thumb{background:#3a3a3c;border-radius:8px}
 .doc pre code{display:block;background:transparent;border:0;color:inherit;padding:0;font-size:1em;white-space:pre}
+.doc pre .hl-comment{color:var(--hl-comment);font-style:italic}
+.doc pre .hl-keyword{color:var(--hl-keyword);font-weight:500}
+.doc pre .hl-string{color:var(--hl-string)}
+.doc pre .hl-number{color:var(--hl-number)}
+.doc pre .hl-literal{color:var(--hl-literal);font-weight:500}
+.doc pre .hl-key{color:var(--hl-key)}
+.doc pre .hl-variable{color:var(--hl-variable)}
+.doc pre .hl-option{color:var(--hl-option)}
 .doc pre .copy{position:absolute;top:10px;right:10px;background:rgba(255,255,255,.08);color:var(--code-fg);border:1px solid rgba(255,255,255,.18);border-radius:980px;padding:4px 12px;font:500 .7rem/1 -apple-system,"SF Pro Text",sans-serif;cursor:pointer;opacity:0;transition:opacity .15s ease,background .15s ease,border-color .15s ease;letter-spacing:.01em}
 .doc pre:hover .copy,.doc pre .copy:focus{opacity:1}
 .doc pre .copy:hover{background:rgba(255,255,255,.16)}
