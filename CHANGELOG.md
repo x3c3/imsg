@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.7.1 - 2026-05-06
+
+### Release Packaging
+- fix: ship a signed and notarized macOS release archive and refresh the
+  Homebrew checksum for the patch release.
+
 ## 0.7.0 - 2026-05-06
 
 ### Private API Bridge
