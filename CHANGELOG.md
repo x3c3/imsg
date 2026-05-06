@@ -12,6 +12,9 @@
 - fix: route default bridge calls over v2 IPC when available and reject
   unsupported `chat-create --service SMS` requests instead of reporting a
   service that was not applied.
+- fix: decode typedstream attributed bodies with `0x81`/`0x82` length prefixes
+  so long fallback message text is preserved in history and watch output (#99,
+  thanks @SagarSDagdu).
 
 ### Docs And CI
 - docs: publish the per-feature docs site at `imsg.sh` and add
