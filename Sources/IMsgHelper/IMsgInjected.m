@@ -16,6 +16,25 @@
 #import <unistd.h>
 #import <stdio.h>
 #import <sys/stat.h>
+#import <dlfcn.h>
+
+// IMCore C function. The symbol lives in the dyld shared cache on macOS 26
+// and isn't picked up by the static linker, so resolve dynamically. Given a
+// parent message's first IMMessagePartChatItem, returns the thread
+// identifier string ("0:0:<parent-len>:<parent-guid>") to set on the reply.
+typedef NSString *(*IMCreateThreadIdentifierForMessagePartChatItemFn)(id);
+
+static IMCreateThreadIdentifierForMessagePartChatItemFn
+imCreateThreadIdentifierFn(void) {
+    static IMCreateThreadIdentifierForMessagePartChatItemFn fn = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        fn = (IMCreateThreadIdentifierForMessagePartChatItemFn)
+            dlsym(RTLD_DEFAULT,
+                  "IMCreateThreadIdentifierForMessagePartChatItem");
+    });
+    return fn;
+}
 
 #pragma mark - Constants
 
@@ -30,6 +49,12 @@ static NSString *kRpcInDir = nil;     // .imsg-rpc/in/
 static NSString *kRpcOutDir = nil;    // .imsg-rpc/out/
 static NSString *kEventsFile = nil;   // .imsg-events.jsonl
 static NSString *kEventsRotated = nil;// .imsg-events.jsonl.1
+
+// Diagnostic file logger. Unified logging redacts NSLog output from inside
+// system app processes on macOS 26, which makes diagnosing handler behavior
+// from outside the dylib painful. Append-only file in the sandbox container
+// gives us a stable channel that's readable from outside.
+static NSString *kDebugLogFile = nil; // .imsg-bridge.log
 
 static NSTimer *fileWatchTimer = nil;
 static NSTimer *rpcInboxTimer = nil;
@@ -52,10 +77,31 @@ static void initFilePaths(void) {
         kRpcOutDir = [kRpcDir stringByAppendingPathComponent:@"out"];
         kEventsFile = [containerPath stringByAppendingPathComponent:@".imsg-events.jsonl"];
         kEventsRotated = [containerPath stringByAppendingPathComponent:@".imsg-events.jsonl.1"];
+        kDebugLogFile = [containerPath stringByAppendingPathComponent:@".imsg-bridge.log"];
     }
     if (processedRpcIds == nil) {
         processedRpcIds = [NSMutableSet set];
     }
+}
+
+/// Append a line to `.imsg-bridge.log` inside the Messages container. NSLog
+/// output is redacted by unified logging when emitted from system apps on
+/// macOS 26, so this is the only reliable diagnostic channel for behavior
+/// inside the injected dylib.
+__attribute__((format(NSString, 1, 2)))
+static void debugLog(NSString *fmt, ...) {
+    if (!kDebugLogFile) return;
+    va_list args;
+    va_start(args, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
+    va_end(args);
+    static NSISO8601DateFormatter *fmtr;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ fmtr = [NSISO8601DateFormatter new]; });
+    NSString *line = [NSString stringWithFormat:@"%@ %@\n",
+                      [fmtr stringFromDate:[NSDate date]], msg];
+    FILE *fp = fopen(kDebugLogFile.UTF8String, "a");
+    if (fp) { fputs(line.UTF8String, fp); fclose(fp); }
 }
 
 #pragma mark - Selector Probes
@@ -129,11 +175,15 @@ static void probeSelectors(void) {
 - (id)account;
 - (NSString *)displayNameForChat;
 - (void)sendMessage:(id)message;
+- (void)_sendMessage:(id)message adjustingSender:(BOOL)adjust shouldQueue:(BOOL)queue;
 - (void)leaveChat;
-- (void)setDisplayName:(NSString *)name;
-- (void)setUnreadCount:(NSInteger)count;
+- (void)_setDisplayName:(NSString *)name;
 - (BOOL)hasUnreadMessages;
 - (NSArray *)chatItems;
+- (void)inviteParticipantsToiMessageChat:(NSArray *)participants reason:(NSInteger)reason;
+- (void)markLastMessageAsUnread;
+- (void)markChatItemAsNotifyRecipient:(id)chatItem;
+- (void)sendGroupPhotoUpdate:(NSString *)transferGUID;
 @end
 
 @interface IMMessage : NSObject
@@ -143,12 +193,37 @@ static void probeSelectors(void) {
 - (NSAttributedString *)text;
 - (NSAttributedString *)subject;
 - (NSArray *)fileTransferGUIDs;
+- (id)_imMessageItem;
+- (void)_updateText:(NSAttributedString *)attributedText;
+- (void)setThreadIdentifier:(NSString *)threadIdentifier;
+- (void)setThreadOriginator:(id)originator;
++ (id)messageFromIMMessageItem:(id)item sender:(id)sender subject:(id)subject;
 @end
 
 @interface IMMessageItem : NSObject
 - (NSString *)guid;
 - (NSArray *)_newChatItems;
 - (id)message;
+- (NSData *)bodyData;
+- (id)body;
+- (void)setBodyData:(NSData *)data;
+- (void)_regenerateBodyData;
+- (id)initWithSender:(id)sender
+                time:(NSDate *)time
+                body:(NSAttributedString *)body
+          attributes:(NSDictionary *)attributes
+   fileTransferGUIDs:(NSArray *)fileTransferGUIDs
+               flags:(unsigned long long)flags
+               error:(NSError *)error
+                guid:(NSString *)guid
+    threadIdentifier:(NSString *)threadIdentifier;
+- (void)setExpressiveSendStyleID:(NSString *)styleID;
+- (void)setSubject:(NSString *)subject;
+- (void)setMessageSubject:(NSAttributedString *)subject;
+- (void)setAssociatedMessageGUID:(NSString *)guid;
+- (void)setAssociatedMessageType:(long long)type;
+- (void)setAssociatedMessageRange:(NSRange)range;
+- (void)setMessageSummaryInfo:(NSDictionary *)info;
 @end
 
 @interface IMMessagePartChatItem : NSObject
@@ -165,12 +240,25 @@ static void probeSelectors(void) {
 - (NSString *)guid;
 - (NSString *)localPath;
 - (NSString *)transferState;
+- (NSURL *)localURL;
+- (void)setLocalURL:(NSURL *)url;
 @end
 
 @interface IMFileTransferCenter : NSObject
 + (instancetype)sharedInstance;
-- (IMFileTransfer *)guidForNewOutgoingTransferWithLocalURL:(NSURL *)url;
+- (NSString *)guidForNewOutgoingTransferWithLocalURL:(NSURL *)url;
 - (IMFileTransfer *)transferForGUID:(NSString *)guid;
+- (void)retargetTransfer:(NSString *)guid toPath:(NSString *)path;
+- (void)registerTransferWithDaemon:(NSString *)guid;
+@end
+
+@interface IMDPersistentAttachmentController : NSObject
++ (instancetype)sharedInstance;
+- (NSString *)_persistentPathForTransfer:(IMFileTransfer *)transfer
+                                filename:(NSString *)filename
+                             highQuality:(BOOL)highQuality
+                                chatGUID:(NSString *)chatGUID
+                     storeAtExternalPath:(BOOL)external;
 @end
 
 @interface IMChatHistoryController : NSObject
@@ -179,6 +267,8 @@ static void probeSelectors(void) {
                     beforeDate:(NSDate *)date
                          limit:(NSUInteger)limit
                   loadIfNeeded:(BOOL)load;
+- (void)loadMessageWithGUID:(NSString *)guid
+            completionBlock:(void (^)(id message))completion;
 @end
 
 @interface IMNicknameController : NSObject
@@ -374,6 +464,7 @@ static id findChat(NSString *identifier) {
 static NSDictionary* handleTyping(NSInteger requestId, NSDictionary *params) {
     NSString *handle = params[@"handle"];
     NSNumber *state = params[@"typing"] ?: params[@"state"];
+    debugLog(@"handleTyping: enter handle=%@ state=%@ params=%@", handle, state, params);
 
     if (!handle) {
         return errorResponse(requestId, @"Missing required parameter: handle");
@@ -383,6 +474,7 @@ static NSDictionary* handleTyping(NSInteger requestId, NSDictionary *params) {
     id chat = findChat(handle);
 
     if (!chat) {
+        debugLog(@"handleTyping: chat not found for %@", handle);
         return errorResponse(requestId,
             [NSString stringWithFormat:@"Chat not found: %@", handle]);
     }
@@ -406,6 +498,33 @@ static NSDictionary* handleTyping(NSInteger requestId, NSDictionary *params) {
             supportsTyping = ((BOOL (*)(id, SEL))objc_msgSend)(chat, supportsSel);
         }
 
+        BOOL isCurrentlyTyping = NO;
+        if ([chat respondsToSelector:@selector(isCurrentlyTyping)]) {
+            isCurrentlyTyping = ((BOOL (*)(id, SEL))objc_msgSend)(chat, @selector(isCurrentlyTyping));
+        }
+
+        id account = nil;
+        NSString *acctService = @"nil";
+        BOOL acctActive = NO;
+        BOOL acctLoggedIn = NO;
+        if ([chat respondsToSelector:@selector(account)]) {
+            account = [chat performSelector:@selector(account)];
+            if ([account respondsToSelector:@selector(serviceName)]) {
+                acctService = [account performSelector:@selector(serviceName)] ?: @"nil";
+            }
+            if ([account respondsToSelector:@selector(isActive)]) {
+                acctActive = ((BOOL (*)(id, SEL))objc_msgSend)(account, @selector(isActive));
+            }
+            if ([account respondsToSelector:@selector(loggedIn)]) {
+                acctLoggedIn = ((BOOL (*)(id, SEL))objc_msgSend)(account, @selector(loggedIn));
+            }
+        }
+
+        debugLog(@"handleTyping: chat class=%@ guid=%@ ident=%@ supportsTyping=%d alreadyTyping=%d "
+                 @"acctService=%@ acctActive=%d acctLoggedIn=%d target=%d",
+                 chatClass, chatGUID, chatIdent, supportsTyping, isCurrentlyTyping,
+                 acctService, acctActive, acctLoggedIn, typing);
+
         NSLog(@"[imsg-bridge] Chat found: class=%@, guid=%@, identifier=%@, supportsTyping=%@",
               chatClass, chatGUID, chatIdent, supportsTyping ? @"YES" : @"NO");
 
@@ -422,6 +541,13 @@ static NSDictionary* handleTyping(NSInteger requestId, NSDictionary *params) {
             [inv setArgument:&typing atIndex:2];
             [inv invoke];
 
+            BOOL afterTyping = NO;
+            if ([chat respondsToSelector:@selector(isCurrentlyTyping)]) {
+                afterTyping = ((BOOL (*)(id, SEL))objc_msgSend)(chat, @selector(isCurrentlyTyping));
+            }
+            debugLog(@"handleTyping: setLocalUserIsTyping:%d returned, isCurrentlyTyping after=%d",
+                     typing, afterTyping);
+
             NSLog(@"[imsg-bridge] Called setLocalUserIsTyping:%@ for %@",
                   typing ? @"YES" : @"NO", handle);
             return successResponse(requestId, @{
@@ -430,8 +556,10 @@ static NSDictionary* handleTyping(NSInteger requestId, NSDictionary *params) {
             });
         }
 
+        debugLog(@"handleTyping: setLocalUserIsTyping: not available on chat class=%@", chatClass);
         return errorResponse(requestId, @"setLocalUserIsTyping: method not available");
     } @catch (NSException *exception) {
+        debugLog(@"handleTyping: exception=%@", exception.reason);
         return errorResponse(requestId,
             [NSString stringWithFormat:@"Failed to set typing: %@", exception.reason]);
     }
@@ -439,6 +567,7 @@ static NSDictionary* handleTyping(NSInteger requestId, NSDictionary *params) {
 
 static NSDictionary* handleRead(NSInteger requestId, NSDictionary *params) {
     NSString *handle = params[@"handle"];
+    debugLog(@"handleRead: enter handle=%@ params=%@", handle, params);
 
     if (!handle) {
         return errorResponse(requestId, @"Missing required parameter: handle");
@@ -447,14 +576,38 @@ static NSDictionary* handleRead(NSInteger requestId, NSDictionary *params) {
     id chat = findChat(handle);
 
     if (!chat) {
+        debugLog(@"handleRead: chat not found for %@", handle);
         return errorResponse(requestId,
             [NSString stringWithFormat:@"Chat not found: %@", handle]);
     }
 
+    NSString *chatClass = NSStringFromClass([chat class]);
+    NSUInteger unreadBefore = 0;
+    BOOL hadUnread = NO;
+    if ([chat respondsToSelector:@selector(unreadMessageCount)]) {
+        unreadBefore = ((NSUInteger (*)(id, SEL))objc_msgSend)(chat, @selector(unreadMessageCount));
+    }
+    if ([chat respondsToSelector:@selector(hasUnreadMessages)]) {
+        hadUnread = ((BOOL (*)(id, SEL))objc_msgSend)(chat, @selector(hasUnreadMessages));
+    }
+
     @try {
         SEL readSel = @selector(markAllMessagesAsRead);
+        debugLog(@"handleRead: chat class=%@ unreadBefore=%lu hasUnread=%d responds=%d",
+                 chatClass, (unsigned long)unreadBefore, hadUnread,
+                 [chat respondsToSelector:readSel]);
         if ([chat respondsToSelector:readSel]) {
             [chat performSelector:readSel];
+            NSUInteger unreadAfter = 0;
+            BOOL hasUnreadAfter = NO;
+            if ([chat respondsToSelector:@selector(unreadMessageCount)]) {
+                unreadAfter = ((NSUInteger (*)(id, SEL))objc_msgSend)(chat, @selector(unreadMessageCount));
+            }
+            if ([chat respondsToSelector:@selector(hasUnreadMessages)]) {
+                hasUnreadAfter = ((BOOL (*)(id, SEL))objc_msgSend)(chat, @selector(hasUnreadMessages));
+            }
+            debugLog(@"handleRead: markAllMessagesAsRead returned, unreadAfter=%lu hasUnreadAfter=%d",
+                     (unsigned long)unreadAfter, hasUnreadAfter);
             NSLog(@"[imsg-bridge] Marked all messages as read for %@", handle);
             return successResponse(requestId, @{
                 @"handle": handle,
@@ -464,6 +617,7 @@ static NSDictionary* handleRead(NSInteger requestId, NSDictionary *params) {
             return errorResponse(requestId, @"markAllMessagesAsRead method not available");
         }
     } @catch (NSException *exception) {
+        debugLog(@"handleRead: exception=%@", exception.reason);
         return errorResponse(requestId,
             [NSString stringWithFormat:@"Failed to mark as read: %@", exception.reason]);
     }
@@ -704,9 +858,361 @@ static NSMutableAttributedString *buildFormattedAttributed(NSString *text,
 
 #pragma mark - IMMessage Builder
 
+/// Invoke a class method that returns an object, returning a strongly
+/// retained id. NSInvocation returns object references without transferring
+/// ownership, so we read into an `__unsafe_unretained` slot then assign to a
+/// strong variable to balance ARC.
+static id invokeReturningObject(NSInvocation *inv) {
+    __unsafe_unretained id raw = nil;
+    [inv invoke];
+    [inv getReturnValue:&raw];
+    return raw;
+}
+
+/// Apply optional metadata fields directly onto the IMMessageItem before
+/// the IMMessage wrap. Setters on a wrapped IMMessage's `_imMessageItem`
+/// don't persist (the wrap returns a transient item rebuilt each call), so
+/// extended fields like `expressiveSendStyleID` and `associatedMessageGUID`
+/// must be applied here, ahead of the wrap.
+static void applyItemExtendedFields(id item,
+                                    NSAttributedString *subject,
+                                    NSString *effectId,
+                                    NSString *associatedMessageGuid,
+                                    long long associatedMessageType,
+                                    NSRange associatedMessageRange,
+                                    NSDictionary *summaryInfo) {
+    if (!item) return;
+    if (subject.length
+        && [item respondsToSelector:@selector(setMessageSubject:)]) {
+        [item performSelector:@selector(setMessageSubject:) withObject:subject];
+    }
+    if (effectId.length
+        && [item respondsToSelector:@selector(setExpressiveSendStyleID:)]) {
+        [item performSelector:@selector(setExpressiveSendStyleID:)
+                   withObject:effectId];
+    }
+    if (associatedMessageGuid.length && associatedMessageType > 0) {
+        if ([item respondsToSelector:@selector(setAssociatedMessageGUID:)]) {
+            [item performSelector:@selector(setAssociatedMessageGUID:)
+                       withObject:associatedMessageGuid];
+        }
+        if ([item respondsToSelector:@selector(setAssociatedMessageType:)]) {
+            NSMethodSignature *sig = [item methodSignatureForSelector:
+                @selector(setAssociatedMessageType:)];
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setSelector:@selector(setAssociatedMessageType:)];
+            [inv setTarget:item];
+            [inv setArgument:&associatedMessageType atIndex:2];
+            [inv invoke];
+        }
+        if ([item respondsToSelector:@selector(setAssociatedMessageRange:)]) {
+            NSMethodSignature *sig = [item methodSignatureForSelector:
+                @selector(setAssociatedMessageRange:)];
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setSelector:@selector(setAssociatedMessageRange:)];
+            [inv setTarget:item];
+            NSRange range = associatedMessageRange;
+            [inv setArgument:&range atIndex:2];
+            [inv invoke];
+        }
+        if (summaryInfo
+            && [item respondsToSelector:@selector(setMessageSummaryInfo:)]) {
+            [item performSelector:@selector(setMessageSummaryInfo:)
+                       withObject:summaryInfo];
+        }
+    }
+}
+
+/// Build an IMMessageItem with the body set up-front, apply any extended
+/// metadata fields onto the item, then wrap with IMMessage. On macOS 26 the
+/// high-level `+initIMMessageWith…` factories build a transient
+/// IMMessageItem on demand whose `body` / `bodyData` don't survive
+/// `[chat sendMessage:]` — imagent reads `bodyData` from the underlying
+/// item, sees nothing, and silently drops the message. Building the item
+/// up-front and seeding `bodyData` via NSArchiver is the only path that
+/// lands on macOS 26. Returns nil if the required selectors are missing
+/// (older OSes; caller should fall back).
+static id constructIMMessageViaItem(NSAttributedString *attributedText,
+                                    NSAttributedString *subject,
+                                    NSString *effectId,
+                                    NSString *threadIdentifier,
+                                    NSString *associatedMessageGuid,
+                                    long long associatedMessageType,
+                                    NSRange associatedMessageRange,
+                                    NSDictionary *summaryInfo,
+                                    NSArray *fileTransferGuids,
+                                    BOOL isAudioMessage) {
+    Class IMMessageClass = NSClassFromString(@"IMMessage");
+    Class IMMessageItemClass = NSClassFromString(@"IMMessageItem");
+    if (!IMMessageClass || !IMMessageItemClass) return nil;
+
+    SEL itemInitSel = @selector(initWithSender:time:body:attributes:fileTransferGUIDs:flags:error:guid:threadIdentifier:);
+    if (![IMMessageItemClass instancesRespondToSelector:itemInitSel]) return nil;
+
+    SEL wrapSel = @selector(messageFromIMMessageItem:sender:subject:);
+    if (![IMMessageClass respondsToSelector:wrapSel]) return nil;
+
+    id item = [IMMessageItemClass alloc];
+    if (!item) return nil;
+
+    NSDate *now = [NSDate date];
+    NSArray *transferGuids = fileTransferGuids ?: @[];
+    NSError *err = nil;
+    NSString *guid = [[NSUUID UUID] UUIDString];
+    // BlueBubblesHelper-verified flag set: 0x100005 (FromMe | Finished |
+    // 0x100000 finalize bit) for normal text+attachment, 0x10000d when a
+    // subject is set, 0x300005 for audio messages. The earlier `0x5`
+    // variant was the cause of malformed attachments on the receiver — the
+    // 0x100000 bit is what tells imagent to finalize the payload.
+    unsigned long long flags;
+    if (isAudioMessage) {
+        flags = 0x300005ULL;
+    } else if (subject.length) {
+        flags = 0x10000dULL;
+    } else {
+        flags = 0x100005ULL;
+    }
+    id sender = nil;
+    NSDictionary *attributes = nil;
+
+    NSMethodSignature *isig =
+        [IMMessageItemClass instanceMethodSignatureForSelector:itemInitSel];
+    NSInvocation *iinv = [NSInvocation invocationWithMethodSignature:isig];
+    [iinv setSelector:itemInitSel];
+    [iinv setTarget:item];
+    [iinv setArgument:&sender atIndex:2];
+    [iinv setArgument:&now atIndex:3];
+    [iinv setArgument:&attributedText atIndex:4];
+    [iinv setArgument:&attributes atIndex:5];
+    [iinv setArgument:&transferGuids atIndex:6];
+    [iinv setArgument:&flags atIndex:7];
+    [iinv setArgument:&err atIndex:8];
+    [iinv setArgument:&guid atIndex:9];
+    [iinv setArgument:&threadIdentifier atIndex:10];
+    [iinv retainArguments];
+    item = invokeReturningObject(iinv);
+    if (!item) return nil;
+
+    if ([item respondsToSelector:@selector(_regenerateBodyData)]) {
+        [item performSelector:@selector(_regenerateBodyData)];
+    }
+
+    NSData *bodyData = [item respondsToSelector:@selector(bodyData)]
+        ? [item performSelector:@selector(bodyData)] : nil;
+    // imagent reads bodyData (NSArchiver typedstream). On macOS 26 the
+    // initWithSender: path leaves bodyData empty; force-archive the
+    // attributed string ourselves so the daemon has a payload to ship.
+    if (bodyData.length == 0 && attributedText.length > 0
+        && [item respondsToSelector:@selector(setBodyData:)]) {
+        @try {
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            NSData *typedstream = [NSArchiver archivedDataWithRootObject:attributedText];
+            #pragma clang diagnostic pop
+            if (typedstream.length > 0) {
+                [item performSelector:@selector(setBodyData:) withObject:typedstream];
+            }
+        } @catch (NSException *e) {
+            // NSArchiver chokes on NSPresentationIntent attributes that some
+            // markdown initializers emit. Retry with a plain copy.
+            NSMutableAttributedString *plain = [[NSMutableAttributedString alloc]
+                initWithString:[attributedText string]];
+            @try {
+                #pragma clang diagnostic push
+                #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                NSData *plainData = [NSArchiver archivedDataWithRootObject:plain];
+                #pragma clang diagnostic pop
+                [item performSelector:@selector(setBodyData:) withObject:plainData];
+            } @catch (__unused NSException *e2) {
+                // Give up; the wrap below may still succeed for non-empty cases.
+            }
+        }
+    }
+
+    // Set extended fields on the item BEFORE wrapping. The IMMessage wrap's
+    // `_imMessageItem` accessor returns a transient item rebuilt each call,
+    // so post-wrap setters don't persist (per the macOS 26 behavior 10ce6ab
+    // documented).
+    applyItemExtendedFields(item, subject, effectId,
+                            associatedMessageGuid, associatedMessageType,
+                            associatedMessageRange, summaryInfo);
+
+    NSMethodSignature *wsig =
+        [IMMessageClass methodSignatureForSelector:wrapSel];
+    NSInvocation *winv = [NSInvocation invocationWithMethodSignature:wsig];
+    [winv setSelector:wrapSel];
+    [winv setTarget:IMMessageClass];
+    id nilSender = nil;
+    id nilSubject = nil;
+    [winv setArgument:&item atIndex:2];
+    [winv setArgument:&nilSender atIndex:3];
+    [winv setArgument:&nilSubject atIndex:4];
+    [winv retainArguments];
+    return invokeReturningObject(winv);
+}
+
+/// Load the parent message for a reply via IMChatHistoryController and
+/// derive the thread identifier required for proper threaded-reply
+/// rendering on macOS 26 (`0:0:<parent-len>:<parent-guid>`). On earlier
+/// macOS releases setting `associatedMessageGUID` + `associatedMessageType=100`
+/// alone produced a quoted reply; on macOS 26 the receiver also needs the
+/// thread identifier to render the in-line reply UI. Returns nil if the
+/// parent can't be resolved (block-based load timed out, or the IMCore C
+/// helper isn't available); caller should still send without threading
+/// rather than fail the whole reply.
+static NSString *deriveThreadIdentifier(NSString *parentGuid,
+                                         id *outParentMessage) {
+    if (outParentMessage) *outParentMessage = nil;
+    if (parentGuid.length == 0) return nil;
+
+    Class hcClass = NSClassFromString(@"IMChatHistoryController");
+    if (!hcClass) {
+        debugLog(@"deriveThreadIdentifier: IMChatHistoryController class missing");
+        return nil;
+    }
+    id hc = [hcClass performSelector:@selector(sharedInstance)];
+    if (!hc) {
+        debugLog(@"deriveThreadIdentifier: sharedInstance returned nil");
+        return nil;
+    }
+    SEL loadSel = @selector(loadMessageWithGUID:completionBlock:);
+    if (![hc respondsToSelector:loadSel]) {
+        debugLog(@"deriveThreadIdentifier: loadMessageWithGUID:completionBlock: missing");
+        return nil;
+    }
+
+    __block id parent = nil;
+    __block BOOL done = NO;
+    NSMethodSignature *sig = [hc methodSignatureForSelector:loadSel];
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+    [inv setSelector:loadSel];
+    [inv setTarget:hc];
+    NSString *guid = parentGuid;
+    [inv setArgument:&guid atIndex:2];
+    void (^completion)(id) = ^(id message) {
+        parent = message;
+        done = YES;
+    };
+    [inv setArgument:&completion atIndex:3];
+    [inv retainArguments];
+    [inv invoke];
+
+    // Pump the run loop briefly so the load completion can run inline.
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
+    while (!done && [deadline timeIntervalSinceNow] > 0) {
+        [[NSRunLoop currentRunLoop]
+            runMode:NSDefaultRunLoopMode
+            beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    if (!parent) {
+        debugLog(@"deriveThreadIdentifier: parent did not load within 3s for %@",
+                 parentGuid);
+        return nil;
+    }
+    if (outParentMessage) *outParentMessage = parent;
+
+    if (![parent respondsToSelector:@selector(_imMessageItem)]) {
+        debugLog(@"deriveThreadIdentifier: parent has no _imMessageItem");
+        return nil;
+    }
+    id parentItem = [parent performSelector:@selector(_imMessageItem)];
+    SEL chatItemsSel = NSSelectorFromString(@"_newChatItems");
+    if (!parentItem || ![parentItem respondsToSelector:chatItemsSel]) {
+        debugLog(@"deriveThreadIdentifier: parentItem missing _newChatItems");
+        return nil;
+    }
+
+    id items = [parentItem performSelector:chatItemsSel];
+    id chatItem = [items isKindOfClass:[NSArray class]]
+        ? ((NSArray *)items).firstObject : items;
+    if (!chatItem) {
+        debugLog(@"deriveThreadIdentifier: parent has no chat items");
+        return nil;
+    }
+
+    IMCreateThreadIdentifierForMessagePartChatItemFn fn =
+        imCreateThreadIdentifierFn();
+    if (!fn) {
+        debugLog(@"deriveThreadIdentifier: IMCreateThreadIdentifier… symbol not found");
+        return nil;
+    }
+    NSString *result = fn(chatItem);
+    debugLog(@"deriveThreadIdentifier: parent=%@ result=%@",
+             parentGuid, result ?: @"(nil)");
+    return result;
+}
+
+/// Load the parent message via `IMChatHistoryController` and return its
+/// first `IMMessagePartChatItem` plus the parent message itself. Used by
+/// reactions to derive the canonical `associatedMessageRange` (BB-verified:
+/// `[item messagePartRange]`, not a hardcoded `{0,1}`).
+///
+/// Block-based load semantics match `loadMessageWithGUID:completionBlock:`,
+/// which `deriveThreadIdentifier` already drives. This helper duplicates
+/// the load to keep the reply / reaction code paths independent (each
+/// fires its own load), which is what BlueBubblesHelper does too — and
+/// avoids gnarly out-parameter plumbing through deriveThreadIdentifier.
+static id loadParentFirstChatItem(NSString *parentGuid, id *outParentMessage) {
+    if (outParentMessage) *outParentMessage = nil;
+    if (parentGuid.length == 0) return nil;
+
+    Class hcClass = NSClassFromString(@"IMChatHistoryController");
+    if (!hcClass) return nil;
+    id hc = [hcClass performSelector:@selector(sharedInstance)];
+    SEL loadSel = @selector(loadMessageWithGUID:completionBlock:);
+    if (!hc || ![hc respondsToSelector:loadSel]) return nil;
+
+    __block id parent = nil;
+    __block BOOL done = NO;
+    NSMethodSignature *sig = [hc methodSignatureForSelector:loadSel];
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+    [inv setSelector:loadSel];
+    [inv setTarget:hc];
+    NSString *guid = parentGuid;
+    [inv setArgument:&guid atIndex:2];
+    void (^completion)(id) = ^(id m) { parent = m; done = YES; };
+    [inv setArgument:&completion atIndex:3];
+    [inv retainArguments];
+    [inv invoke];
+
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
+    while (!done && [deadline timeIntervalSinceNow] > 0) {
+        [[NSRunLoop currentRunLoop]
+            runMode:NSDefaultRunLoopMode
+            beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    if (!parent) return nil;
+    if (outParentMessage) *outParentMessage = parent;
+
+    if (![parent respondsToSelector:@selector(_imMessageItem)]) return nil;
+    id parentItem = [parent performSelector:@selector(_imMessageItem)];
+    SEL chatItemsSel = NSSelectorFromString(@"_newChatItems");
+    if (!parentItem || ![parentItem respondsToSelector:chatItemsSel]) return nil;
+    id items = [parentItem performSelector:chatItemsSel];
+    return [items isKindOfClass:[NSArray class]]
+        ? ((NSArray *)items).firstObject : items;
+}
+
+/// Dispatch a built IMMessage into the chat. BlueBubblesHelper uses the
+/// public `-[IMChat sendMessage:]` for every send (text, attachment,
+/// reaction, reply) on macOS 11+ — including macOS 26. It Just Works as
+/// long as the IMMessage has been built with a proper init (sender = nil
+/// is fine; IMChat's sendMessage: implementation fills it from the chat's
+/// account). The private `_sendMessage:adjustingSender:shouldQueue:` we
+/// were preferring earlier is unnecessary and may silently drop items in
+/// some macOS 26 states.
+static void dispatchIMMessageInChat(IMChat *chat, id message) {
+    [chat performSelector:@selector(sendMessage:) withObject:message];
+}
+
 /// Build an IMMessage suitable for `[chat sendMessage:]`. Handles plain text,
 /// optional subject, optional effect (`com.apple.MobileSMS.expressivesend.*`),
 /// optional reply target (`selectedMessageGuid`), and ddScan flag.
+///
+/// On macOS 26 `+initIMMessageWith…` returns a message whose underlying
+/// IMMessageItem has empty `bodyData`, which imagent silently drops. Try the
+/// IMMessageItem-first path first; fall back to the legacy initializer for
+/// older OSes that don't expose the modern item-construction selectors.
 static id buildIMMessage(NSAttributedString *body,
                          NSAttributedString *subject,
                          NSString *effectId,
@@ -718,12 +1224,74 @@ static id buildIMMessage(NSAttributedString *body,
                          NSArray *fileTransferGuids,
                          BOOL isAudioMessage,
                          BOOL ddScan) {
+    // Reactions take a different code path entirely (macOS 26 init below) —
+    // the IMMessageItem-first construction can't carry associated-message
+    // fields atomically, and post-init setters don't survive the wrap.
+    //
+    // Attachments also bypass IMMessageItem-first: BB's `initWithSender:…:
+    // expressiveSendStyleID:` (further down) handles fileTransferGUIDs
+    // natively, and going through IMMessageItem-first appears to leave the
+    // attachment payload unfinalized even with the right flags.
+    BOOL isReaction = associatedMessageGuid.length && associatedMessageType > 0;
+    BOOL hasAttachment = fileTransferGuids.count > 0;
+    if (!isReaction && !hasAttachment) {
+        id viaItem = constructIMMessageViaItem(body, subject, effectId,
+                                                threadIdentifier,
+                                                associatedMessageGuid,
+                                                associatedMessageType,
+                                                associatedMessageRange,
+                                                summaryInfo,
+                                                fileTransferGuids,
+                                                isAudioMessage);
+        if (viaItem) return viaItem;
+    }
+    // Legacy fallback for older macOS that doesn't expose the
+    // IMMessageItem 9-arg initializer or +messageFromIMMessageItem:.
     Class messageClass = NSClassFromString(@"IMMessage");
     if (!messageClass) return nil;
 
     // Reaction / reply path: associatedMessageGuid + associatedMessageType.
     if (associatedMessageGuid.length && associatedMessageType > 0) {
+        // macOS 26 path (BlueBubblesHelper-verified, 13 args, no
+        // balloonBundleID/payloadData/expressiveSendStyleID). BB allocates
+        // and inits in two steps: `[[IMMessage alloc] init]` then call this
+        // longer initializer on the result.
+        SEL macos26Sel = @selector(initWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:associatedMessageGUID:associatedMessageType:associatedMessageRange:messageSummaryInfo:);
+        if ([messageClass instancesRespondToSelector:macos26Sel]) {
+            unsigned long long flags = 0x5;
+            id msg = [[messageClass alloc] init];
+            NSMethodSignature *sig =
+                [messageClass instanceMethodSignatureForSelector:macos26Sel];
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setSelector:macos26Sel];
+            [inv setTarget:msg];
+            id nilObj = nil;
+            NSDate *now = [NSDate date];
+            [inv setArgument:&nilObj atIndex:2];           // sender
+            [inv setArgument:&now atIndex:3];              // time
+            [inv setArgument:&body atIndex:4];             // text
+            [inv setArgument:&subject atIndex:5];          // messageSubject
+            [inv setArgument:&fileTransferGuids atIndex:6];
+            [inv setArgument:&flags atIndex:7];
+            [inv setArgument:&nilObj atIndex:8];           // error
+            [inv setArgument:&nilObj atIndex:9];           // guid
+            [inv setArgument:&nilObj atIndex:10];          // subject (string)
+            [inv setArgument:&associatedMessageGuid atIndex:11];
+            [inv setArgument:&associatedMessageType atIndex:12];
+            [inv setArgument:&associatedMessageRange atIndex:13];
+            [inv setArgument:&summaryInfo atIndex:14];
+            [inv retainArguments];
+            id result = invokeReturningObject(inv);
+            debugLog(@"buildIMMessage: reaction via macos26Sel result=%@",
+                     result ? NSStringFromClass([result class]) : @"(nil)");
+            if (result) return result;
+        }
+
+        // Legacy 17-arg form for older macOS.
         SEL sel = @selector(initIMMessageWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:balloonBundleID:payloadData:expressiveSendStyleID:associatedMessageGUID:associatedMessageType:associatedMessageRange:messageSummaryInfo:);
+        BOOL responds = [messageClass instancesRespondToSelector:sel];
+        debugLog(@"buildIMMessage: reaction path; long-init responds=%d type=%lld guid=%@",
+                 responds, associatedMessageType, associatedMessageGuid);
         id msg = [messageClass alloc];
         if ([msg respondsToSelector:sel]) {
             unsigned long long flags = 0x5;
@@ -756,7 +1324,51 @@ static id buildIMMessage(NSAttributedString *body,
         }
     }
 
-    // Normal send / reply path.
+    // Normal send / reply path. Try the BB-verified macOS 26 selector
+    // (`initWithSender:…:expressiveSendStyleID:`, 12 args, no `IMMessage`
+    // prefix) first; fall back to the legacy `initIMMessageWithSender:` for
+    // older releases.
+    SEL bbSendSel = @selector(initWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:balloonBundleID:payloadData:expressiveSendStyleID:);
+    if ([messageClass instancesRespondToSelector:bbSendSel]) {
+        unsigned long long flags;
+        if (isAudioMessage) {
+            flags = 0x300005ULL;
+        } else if (subject.length) {
+            flags = 0x10000dULL;
+        } else {
+            flags = 0x100005ULL;
+        }
+        id m = [[messageClass alloc] init];
+        NSMethodSignature *sig = [messageClass instanceMethodSignatureForSelector:bbSendSel];
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        [inv setSelector:bbSendSel];
+        [inv setTarget:m];
+        id nilObj = nil;
+        NSDate *now = [NSDate date];
+        [inv setArgument:&nilObj atIndex:2];           // sender
+        [inv setArgument:&now atIndex:3];              // time
+        [inv setArgument:&body atIndex:4];             // text
+        [inv setArgument:&subject atIndex:5];          // messageSubject
+        [inv setArgument:&fileTransferGuids atIndex:6];
+        [inv setArgument:&flags atIndex:7];
+        [inv setArgument:&nilObj atIndex:8];           // error
+        [inv setArgument:&nilObj atIndex:9];           // guid
+        [inv setArgument:&nilObj atIndex:10];          // subject string
+        [inv setArgument:&nilObj atIndex:11];          // balloonBundleID
+        [inv setArgument:&nilObj atIndex:12];          // payloadData
+        [inv setArgument:&effectId atIndex:13];        // expressiveSendStyleID
+        [inv retainArguments];
+        id result = invokeReturningObject(inv);
+        if (result) {
+            if (threadIdentifier
+                && [result respondsToSelector:@selector(setThreadIdentifier:)]) {
+                [result performSelector:@selector(setThreadIdentifier:)
+                             withObject:threadIdentifier];
+            }
+            return result;
+        }
+    }
+
     SEL sel = @selector(initIMMessageWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:balloonBundleID:payloadData:expressiveSendStyleID:);
     id msg = [messageClass alloc];
     if ([msg respondsToSelector:sel]) {
@@ -810,14 +1422,24 @@ static id buildIMMessage(NSAttributedString *body,
     return nil;
 }
 
-/// Async chat-item lookup. Calls cb on the main thread once items are loaded
-/// (or with nil if loading times out / no match). Note: the Messages.app
-/// IMChatHistoryController loads asynchronously into chat.chatItems; we issue
-/// the load and then poll for the matching guid.
+/// Look up a chat item by message guid. Tries BlueBubblesHelper's
+/// block-based `loadMessageWithGUID:completionBlock:` first — that path
+/// works for messages older than what's currently loaded into the live
+/// `chat.chatItems` window. Falls back to the older
+/// `loadedChatItemsForChat:beforeDate:limit:loadIfNeeded:` + sync poll
+/// for OSes that don't expose the block-based load.
 static id findMessageItem(IMChat *chat, NSString *messageGuid) {
     if (!chat || !messageGuid.length) {
         return nil;
     }
+
+    // BB-verified macOS 11+ path: block-based load via IMChatHistoryController
+    // (returns an IMMessage). Callers want the chat item, so navigate
+    // IMMessage → IMMessageItem → first IMMessagePartChatItem via the
+    // same accessor walk loadParentFirstChatItem performs.
+    id loadedChatItem = loadParentFirstChatItem(messageGuid, NULL);
+    if (loadedChatItem) return loadedChatItem;
+
     Class hcClass = NSClassFromString(@"IMChatHistoryController");
     id hc = hcClass ? [hcClass performSelector:@selector(sharedInstance)] : nil;
     if (hc && [hc respondsToSelector:@selector(loadedChatItemsForChat:beforeDate:limit:loadIfNeeded:)]) {
@@ -979,10 +1601,24 @@ static NSDictionary *handleSendMessage(NSInteger requestId, NSDictionary *params
     NSRange zeroRange = NSMakeRange(0, body.length);
     long long associatedType = selectedMessageGuid.length ? 100 : 0;
 
+    // Reply targets need a derived thread identifier on macOS 26 to render
+    // as a threaded in-line reply rather than a standalone message — the
+    // associated_message_guid alone isn't enough on the receiver. Best-effort:
+    // if we can't derive (parent not loadable, IMCore symbol missing) we
+    // still send with the associated fields and let the receiver render
+    // a quoted reply.
+    id parentMessage = nil;
+    NSString *threadIdentifier = nil;
+    if (selectedMessageGuid.length) {
+        threadIdentifier = deriveThreadIdentifier(selectedMessageGuid, &parentMessage);
+        debugLog(@"handleSendMessage: parent=%@ threadId=%@",
+                 selectedMessageGuid, threadIdentifier ?: @"(none)");
+    }
+
     @try {
         id imMessage = buildIMMessage(body, subjectAttr,
                                       effectId,
-                                      /*threadIdentifier*/ nil,
+                                      threadIdentifier,
                                       selectedMessageGuid,
                                       associatedType,
                                       zeroRange,
@@ -992,6 +1628,20 @@ static NSDictionary *handleSendMessage(NSInteger requestId, NSDictionary *params
                                       ddScan);
         if (!imMessage) {
             return errorResponse(requestId, @"Could not construct IMMessage");
+        }
+
+        // Set thread originator on the wrapped message too — some receivers
+        // expect both setThreadIdentifier on the item and setThreadOriginator
+        // on the IMMessage to render as a thread.
+        if (parentMessage
+            && [imMessage respondsToSelector:@selector(setThreadOriginator:)]) {
+            [imMessage performSelector:@selector(setThreadOriginator:)
+                            withObject:parentMessage];
+        }
+        if (threadIdentifier
+            && [imMessage respondsToSelector:@selector(setThreadIdentifier:)]) {
+            [imMessage performSelector:@selector(setThreadIdentifier:)
+                            withObject:threadIdentifier];
         }
 
         if (gHasSendMessageReason && ddScan) {
@@ -1011,7 +1661,7 @@ static NSDictionary *handleSendMessage(NSInteger requestId, NSDictionary *params
                 [inv invoke];
             });
         } else {
-            [chat performSelector:@selector(sendMessage:) withObject:imMessage];
+            dispatchIMMessageInChat(chat, imMessage);
         }
 
         // Best-effort messageGuid; not always available immediately.
@@ -1081,7 +1731,7 @@ static NSDictionary *handleSendMultipart(NSInteger requestId, NSDictionary *para
         if (!imMessage) {
             return errorResponse(requestId, @"Could not construct multipart IMMessage");
         }
-        [chat performSelector:@selector(sendMessage:) withObject:imMessage];
+        dispatchIMMessageInChat(chat, imMessage);
         NSString *guid = lastSentMessageGuid(chat);
         return successResponse(requestId, @{
             @"chatGuid": chatGuid,
@@ -1094,8 +1744,162 @@ static NSDictionary *handleSendMultipart(NSInteger requestId, NSDictionary *para
     }
 }
 
+/// Build an attachment-bearing attributed string. The placeholder is an OBJ
+/// replacement character (￼) tagged with the IMCore attachment attributes
+/// (`__kIMFileTransferGUIDAttributeName`, `__kIMFilenameAttributeName`,
+/// `__kIMMessagePartAttributeName`, `__kIMBaseWritingDirectionAttributeName`).
+/// Without these attributes Messages.app sends an empty-body message and never
+/// links the attachment row in chat.db.
+static NSAttributedString *buildAttachmentAttributed(NSString *transferGuid,
+                                                     NSString *filename,
+                                                     NSInteger partIndex) {
+    NSDictionary *attrs = @{
+        @"__kIMBaseWritingDirectionAttributeName": @"-1",
+        @"__kIMFileTransferGUIDAttributeName": transferGuid ?: @"",
+        @"__kIMFilenameAttributeName": filename ?: @"",
+        @"__kIMMessagePartAttributeName": @(partIndex),
+    };
+    return [[NSAttributedString alloc] initWithString:@"￼" attributes:attrs];
+}
+
+/// Register an outgoing file transfer with IMFileTransferCenter so that
+/// Messages.app/imagent persists the attachment row and links it back to the
+/// outbound message. Mirrors BlueBubblesHelper's `prepareFileTransferForAttachment`:
+///   1. Allocate a guid via `guidForNewOutgoingTransferWithLocalURL:`.
+///   2. Resolve the resulting `IMFileTransfer` via `transferForGUID:`.
+///   3. Ask `IMDPersistentAttachmentController` for the canonical attachment
+///      path and copy the source file there (Messages will only register
+///      transfers whose backing file lives in its container).
+///   4. `retargetTransfer:toPath:` + `setLocalURL:` to point the transfer at
+///      the persistent copy.
+///   5. `registerTransferWithDaemon:` so the daemon picks it up.
+/// On failure returns `nil`; the caller emits the error.
+static IMFileTransfer *prepareOutgoingTransfer(NSURL *originalURL, NSString *filename,
+                                               NSString **outErr) {
+    Class ftcClass = NSClassFromString(@"IMFileTransferCenter");
+    if (!ftcClass) {
+        if (outErr) *outErr = @"IMFileTransferCenter not available";
+        return nil;
+    }
+    id ftc = [ftcClass performSelector:@selector(sharedInstance)];
+    if (!ftc) {
+        if (outErr) *outErr = @"FileTransferCenter unavailable";
+        return nil;
+    }
+    if (![ftc respondsToSelector:@selector(guidForNewOutgoingTransferWithLocalURL:)]) {
+        if (outErr) *outErr = @"guidForNewOutgoingTransferWithLocalURL: unavailable";
+        return nil;
+    }
+
+    id rawGuid = [ftc performSelector:@selector(guidForNewOutgoingTransferWithLocalURL:)
+                           withObject:originalURL];
+    if (![rawGuid isKindOfClass:[NSString class]] || ![(NSString *)rawGuid length]) {
+        if (outErr) *outErr = @"Could not allocate transfer guid";
+        return nil;
+    }
+    NSString *transferGuid = (NSString *)rawGuid;
+
+    IMFileTransfer *transfer = nil;
+    if ([ftc respondsToSelector:@selector(transferForGUID:)]) {
+        transfer = [ftc performSelector:@selector(transferForGUID:) withObject:transferGuid];
+    }
+    if (!transfer) {
+        if (outErr) *outErr = @"Could not resolve IMFileTransfer for guid";
+        return nil;
+    }
+
+    // Try to copy the source file into the IMD-managed attachments tree and
+    // retarget the transfer. If the persistent-path API isn't available (older
+    // macOS), fall back to registering the transfer as-is — the daemon may
+    // still accept a path under a permissive location.
+    Class pacClass = NSClassFromString(@"IMDPersistentAttachmentController");
+    if (pacClass) {
+        id pac = [pacClass performSelector:@selector(sharedInstance)];
+        SEL pathSel = @selector(_persistentPathForTransfer:filename:highQuality:chatGUID:storeAtExternalPath:);
+        if (pac && [pac respondsToSelector:pathSel]) {
+            NSMethodSignature *sig = [pac methodSignatureForSelector:pathSel];
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setSelector:pathSel];
+            [inv setTarget:pac];
+            __unsafe_unretained IMFileTransfer *xfer = transfer;
+            __unsafe_unretained NSString *fn = filename ?: [originalURL lastPathComponent];
+            __unsafe_unretained NSString *nilGuid = nil;
+            BOOL hi = YES;
+            BOOL ext = YES;
+            [inv setArgument:&xfer atIndex:2];
+            [inv setArgument:&fn atIndex:3];
+            [inv setArgument:&hi atIndex:4];
+            [inv setArgument:&nilGuid atIndex:5];
+            [inv setArgument:&ext atIndex:6];
+            [inv retainArguments];
+            [inv invoke];
+            __unsafe_unretained NSString *raw = nil;
+            [inv getReturnValue:&raw];
+            // Take a strong reference immediately — invocation returns an
+            // unretained pointer that ARC may release before the next use.
+            NSString *persistentPath = raw;
+            debugLog(@"prepareOutgoingTransfer: persistentPath=%@ filename=%@",
+                     persistentPath ?: @"(nil)", fn);
+
+            if (persistentPath.length) {
+                NSURL *persistentURL = [NSURL fileURLWithPath:persistentPath];
+                NSURL *parent = [persistentURL URLByDeletingLastPathComponent];
+                NSError *folderErr = nil;
+                [[NSFileManager defaultManager] createDirectoryAtURL:parent
+                                         withIntermediateDirectories:YES
+                                                          attributes:nil
+                                                               error:&folderErr];
+                if (folderErr) {
+                    if (outErr) *outErr = [NSString stringWithFormat:
+                        @"Failed to create attachment dir: %@", folderErr.localizedDescription];
+                    return nil;
+                }
+                // If the destination already exists (e.g., re-send of the same
+                // file), nuke the stale copy so copyItem doesn't fail.
+                if ([[NSFileManager defaultManager] fileExistsAtPath:persistentPath]) {
+                    [[NSFileManager defaultManager] removeItemAtURL:persistentURL error:NULL];
+                }
+                NSError *copyErr = nil;
+                [[NSFileManager defaultManager] copyItemAtURL:originalURL
+                                                        toURL:persistentURL
+                                                        error:&copyErr];
+                if (copyErr) {
+                    if (outErr) *outErr = [NSString stringWithFormat:
+                        @"Failed to copy attachment: %@", copyErr.localizedDescription];
+                    return nil;
+                }
+                if ([ftc respondsToSelector:@selector(retargetTransfer:toPath:)]) {
+                    NSMethodSignature *rsig = [ftc methodSignatureForSelector:
+                        @selector(retargetTransfer:toPath:)];
+                    NSInvocation *rinv = [NSInvocation invocationWithMethodSignature:rsig];
+                    [rinv setSelector:@selector(retargetTransfer:toPath:)];
+                    [rinv setTarget:ftc];
+                    __unsafe_unretained NSString *g = transferGuid;
+                    __unsafe_unretained NSString *p = persistentPath;
+                    [rinv setArgument:&g atIndex:2];
+                    [rinv setArgument:&p atIndex:3];
+                    [rinv invoke];
+                }
+                if ([transfer respondsToSelector:@selector(setLocalURL:)]) {
+                    [transfer performSelector:@selector(setLocalURL:) withObject:persistentURL];
+                }
+            }
+        }
+    }
+
+    // Register the transfer so imagent picks it up. BB notes this can warn
+    // silently on failure; we still try because skipping it leaves the
+    // attachment unsendable.
+    if ([ftc respondsToSelector:@selector(registerTransferWithDaemon:)]) {
+        [ftc performSelector:@selector(registerTransferWithDaemon:) withObject:transferGuid];
+    }
+    return transfer;
+}
+
 /// `send-attachment`: registers the file via IMFileTransferCenter and sends a
-/// (typically empty-body) message referencing that transfer guid.
+/// message whose attributedBody carries the OBJ placeholder tagged with the
+/// transfer guid (Messages requires this attribute or the attachment row is
+/// never linked to the outgoing message).
 static NSDictionary *handleSendAttachment(NSInteger requestId, NSDictionary *params) {
     NSString *chatGuid = params[@"chatGuid"];
     NSString *filePath = params[@"filePath"];
@@ -1115,33 +1919,29 @@ static NSDictionary *handleSendAttachment(NSInteger requestId, NSDictionary *par
             [NSString stringWithFormat:@"Chat not found: %@", chatGuid]);
     }
 
-    Class ftcClass = NSClassFromString(@"IMFileTransferCenter");
-    if (!ftcClass) {
-        return errorResponse(requestId, @"IMFileTransferCenter not available");
-    }
-    id ftc = [ftcClass performSelector:@selector(sharedInstance)];
-    if (!ftc) return errorResponse(requestId, @"FileTransferCenter unavailable");
-
     NSURL *fileURL = [NSURL fileURLWithPath:filePath];
+    NSString *filename = [fileURL lastPathComponent];
+
     @try {
-        id transferGuid = nil;
-        if ([ftc respondsToSelector:@selector(guidForNewOutgoingTransferWithLocalURL:)]) {
-            transferGuid = [ftc performSelector:
-                @selector(guidForNewOutgoingTransferWithLocalURL:)
-                                     withObject:fileURL];
+        NSString *prepErr = nil;
+        IMFileTransfer *transfer = prepareOutgoingTransfer(fileURL, filename, &prepErr);
+        if (!transfer) {
+            return errorResponse(requestId,
+                prepErr.length ? prepErr : @"Could not register attachment transfer");
         }
-        if (![transferGuid isKindOfClass:[NSString class]] || ![(NSString *)transferGuid length]) {
-            return errorResponse(requestId, @"Could not register attachment transfer");
+        NSString *transferGuid = [transfer guid];
+        if (!transferGuid.length) {
+            return errorResponse(requestId, @"Transfer registered without guid");
         }
 
-        NSAttributedString *body = buildPlainAttributed(@"￼", 0); // OBJ replacement char
+        NSAttributedString *body = buildAttachmentAttributed(transferGuid, filename, 0);
         id imMessage = buildIMMessage(body, nil, nil, nil, nil, 0,
                                       NSMakeRange(0, body.length), nil,
                                       @[transferGuid], isAudio, NO);
         if (!imMessage) {
             return errorResponse(requestId, @"Could not build IMMessage with attachment");
         }
-        [chat performSelector:@selector(sendMessage:) withObject:imMessage];
+        dispatchIMMessageInChat(chat, imMessage);
         NSString *guid = lastSentMessageGuid(chat);
         return successResponse(requestId, @{
             @"chatGuid": chatGuid,
@@ -1186,22 +1986,131 @@ static NSDictionary *handleSendReaction(NSInteger requestId, NSDictionary *param
             [NSString stringWithFormat:@"Unknown reactionType: %@", reactionType]);
     }
 
-    NSAttributedString *body = buildPlainAttributed(@"", partIndex);
-    NSDictionary *summary = @{
-        @"amc": selectedMessageGuid,
-        @"ams": @"",
-    };
+    // BlueBubblesHelper-verified format for tapbacks:
+    // associatedMessageGUID = `p:<partIndex>/<parent-guid>`. Without the
+    // prefix the receiver doesn't render the heart on the parent message.
+    NSString *associatedRef = [selectedMessageGuid hasPrefix:@"p:"]
+        ? selectedMessageGuid
+        : [NSString stringWithFormat:@"p:%ld/%@",
+                                     (long)partIndex, selectedMessageGuid];
+
+    // Reaction body needs the verb-style summary text — `Loved "parent
+    // text"` — not an empty string. imagent silently drops reactions with
+    // empty body. Best-effort: load the parent and quote its text; fall
+    // back to a generic phrase if we can't resolve it.
+    NSString *verb = @"Loved ";
+    switch (associatedType) {
+        case 2000: case 3000: verb = @"Loved "; break;
+        case 2001: case 3001: verb = @"Liked "; break;
+        case 2002: case 3002: verb = @"Disliked "; break;
+        case 2003: case 3003: verb = @"Laughed at "; break;
+        case 2004: case 3004: verb = @"Emphasized "; break;
+        case 2005: case 3005: verb = @"Questioned "; break;
+    }
+    if (associatedType >= 3000) {
+        NSString *removed = @"Removed a like from ";
+        switch (associatedType) {
+            case 3000: removed = @"Removed a heart from "; break;
+            case 3001: removed = @"Removed a like from "; break;
+            case 3002: removed = @"Removed a dislike from "; break;
+            case 3003: removed = @"Removed a laugh from "; break;
+            case 3004: removed = @"Removed an exclamation from "; break;
+            case 3005: removed = @"Removed a question mark from "; break;
+        }
+        verb = removed;
+    }
+    id parentMsg = nil;
+    id parentChatItem = loadParentFirstChatItem(selectedMessageGuid, &parentMsg);
+    NSString *parentText = nil;
+    if (parentMsg && [parentMsg respondsToSelector:@selector(text)]) {
+        id t = [parentMsg performSelector:@selector(text)];
+        if ([t isKindOfClass:[NSAttributedString class]]) {
+            parentText = [(NSAttributedString *)t string];
+        }
+    }
+    // BB-verified: derive `associatedMessageRange` from the parent's first
+    // chat item — `[item messagePartRange]`. Hardcoding `{0,1}` (what we did
+    // before) targets the wrong part on multipart parents (e.g. tapback on
+    // the second image of a photo grid). For non-text parts (attachments)
+    // BB substitutes "an attachment" for the quoted text.
+    NSRange targetRange = NSMakeRange(0, 1);
+    if (parentChatItem
+        && [parentChatItem respondsToSelector:@selector(messagePartRange)]) {
+        targetRange = [(IMMessagePartChatItem *)parentChatItem messagePartRange];
+        if (targetRange.length == 0) targetRange = NSMakeRange(0, 1);
+    }
+    NSString *quoted = parentText.length
+        ? [NSString stringWithFormat:@"%@“%@”", verb, parentText]
+        : [verb stringByAppendingString:@"a message"];
+    NSAttributedString *body = buildPlainAttributed(quoted, partIndex);
+
+    // BB-verified `messageSummaryInfo` shape: `amc` is an integer count
+    // (always `@1` for single-target tapbacks), `ams` is the parent text
+    // (the receiver's notification preview reads `<verb> "<ams>"`). Earlier
+    // we were stuffing the parent guid into `amc` as a string — the
+    // resulting `message_summary_info` blob was malformed and on macOS 26
+    // imagent silently dropped the reaction.
+    NSDictionary *summary = @{ @"amc": @1,
+                               @"ams": parentText ?: @"" };
+    debugLog(@"handleSendReaction: target=%@ type=%lld range={%lu,%lu} body=%@",
+             associatedRef, associatedType,
+             (unsigned long)targetRange.location, (unsigned long)targetRange.length,
+             quoted);
+
+    // One-shot probe: list every IMMessage class method that mentions
+    // "associated" or "instant" so we can see what reaction constructors
+    // macOS 26 actually exposes. This is intentionally noisy — gates itself
+    // off after the first call. Also dumps IMDPersistentAttachmentController
+    // methods so we can see what attachment-staging selectors are exposed.
+    static dispatch_once_t probeOnce;
+    dispatch_once(&probeOnce, ^{
+        Class pac = NSClassFromString(@"IMDPersistentAttachmentController");
+        unsigned int pn = 0;
+        Method *pm = class_copyMethodList(pac, &pn);
+        for (unsigned int i = 0; i < pn; i++) {
+            const char *name = sel_getName(method_getName(pm[i]));
+            if (strstr(name, "ersistent") || strstr(name, "ttachment")
+                || strstr(name, "ransfer") || strstr(name, "ath")) {
+                debugLog(@"  -[IMDPersistentAttachmentController %s]", name);
+            }
+        }
+        if (pm) free(pm);
+        Class c = NSClassFromString(@"IMMessage");
+        unsigned int n = 0;
+        Method *m = class_copyMethodList(object_getClass(c), &n);
+        for (unsigned int i = 0; i < n; i++) {
+            const char *name = sel_getName(method_getName(m[i]));
+            if (strstr(name, "ssociated") || strstr(name, "nstantMessage")
+                || strstr(name, "eaction") || strstr(name, "knowledgment")) {
+                debugLog(@"  +[IMMessage %s]", name);
+            }
+        }
+        if (m) free(m);
+
+        Class ic = NSClassFromString(@"IMMessageItem");
+        n = 0;
+        Method *im = class_copyMethodList(ic, &n);
+        for (unsigned int i = 0; i < n; i++) {
+            const char *name = sel_getName(method_getName(im[i]));
+            if (strstr(name, "ssociated") || strstr(name, "ummary")
+                || strstr(name, "ssociatedMessage")) {
+                debugLog(@"  -[IMMessageItem %s]", name);
+            }
+        }
+        if (im) free(im);
+    });
     @try {
         id imMessage = buildIMMessage(body, nil, nil, nil,
-                                      selectedMessageGuid,
+                                      associatedRef,
                                       associatedType,
-                                      NSMakeRange(0, 1),
+                                      targetRange,
                                       summary,
                                       @[], NO, NO);
         if (!imMessage) {
             return errorResponse(requestId, @"Could not build reaction IMMessage");
         }
         [chat performSelector:@selector(sendMessage:) withObject:imMessage];
+        debugLog(@"handleSendReaction: dispatched");
         NSString *guid = lastSentMessageGuid(chat);
         return successResponse(requestId, @{
             @"chatGuid": chatGuid,
@@ -1231,28 +2140,21 @@ static NSDictionary *handleNotifyAnyways(NSInteger requestId, NSDictionary *para
     }
 
     @try {
-        SEL sel = @selector(sendMessageAcknowledgment:forChatItem:withMessageSummaryInfo:withGuid:);
+        // BB-verified macOS 12+ path: `markChatItemAsNotifyRecipient:` is
+        // the focus-bypass primitive ("Notify Anyway" UI affordance). Our
+        // previous `sendMessageAcknowledgment:forChatItem:withMessageSummaryInfo:withGuid:`
+        // with ack=1000 was actually a tapback ack, not a notify-anyway —
+        // wrong operation entirely.
+        SEL sel = @selector(markChatItemAsNotifyRecipient:);
         if (![chat respondsToSelector:sel]) {
-            return errorResponse(requestId, @"sendMessageAcknowledgment: not available");
+            return errorResponse(requestId, @"markChatItemAsNotifyRecipient: not available");
         }
         id item = findMessageItem(chat, messageGuid);
         if (!item) {
             return errorResponse(requestId,
                 [NSString stringWithFormat:@"Message not found: %@", messageGuid]);
         }
-        NSMethodSignature *sig = [chat methodSignatureForSelector:sel];
-        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-        [inv setSelector:sel];
-        [inv setTarget:chat];
-        NSInteger ack = 1000;
-        [inv setArgument:&ack atIndex:2];
-        __unsafe_unretained id ci = item;
-        [inv setArgument:&ci atIndex:3];
-        NSDictionary *empty = @{};
-        [inv setArgument:&empty atIndex:4];
-        __unsafe_unretained NSString *nilGuid = nil;
-        [inv setArgument:&nilGuid atIndex:5];
-        [inv invoke];
+        [chat performSelector:sel withObject:item];
         return successResponse(requestId, @{
             @"chatGuid": chatGuid, @"messageGuid": messageGuid, @"queued": @YES
         });
@@ -1466,21 +2368,41 @@ static NSDictionary *handleDeleteMessage(NSInteger requestId, NSDictionary *para
 
 static NSDictionary *handleStartTyping(NSInteger requestId, NSDictionary *params) {
     NSString *chatGuid = params[@"chatGuid"];
+    debugLog(@"handleStartTyping: chatGuid=%@", chatGuid);
     if (!chatGuid.length) return errorResponse(requestId, @"Missing chatGuid");
     IMChat *chat = resolveChatByGuid(chatGuid);
-    if (!chat) return errorResponse(requestId, @"Chat not found");
+    if (!chat) {
+        debugLog(@"handleStartTyping: chat not found");
+        return errorResponse(requestId, @"Chat not found");
+    }
+    BOOL beforeT = NO, afterT = NO;
+    if ([chat respondsToSelector:@selector(isCurrentlyTyping)]) {
+        beforeT = ((BOOL (*)(id, SEL))objc_msgSend)(chat, @selector(isCurrentlyTyping));
+    }
     @try { [chat setLocalUserIsTyping:YES]; }
-    @catch (NSException *ex) { return errorResponse(requestId, ex.reason ?: @"failed"); }
+    @catch (NSException *ex) {
+        debugLog(@"handleStartTyping: exception=%@", ex.reason);
+        return errorResponse(requestId, ex.reason ?: @"failed");
+    }
+    if ([chat respondsToSelector:@selector(isCurrentlyTyping)]) {
+        afterT = ((BOOL (*)(id, SEL))objc_msgSend)(chat, @selector(isCurrentlyTyping));
+    }
+    debugLog(@"handleStartTyping: setLocalUserIsTyping:YES beforeIsTyping=%d afterIsTyping=%d "
+             @"chatClass=%@", beforeT, afterT, NSStringFromClass([chat class]));
     return successResponse(requestId, @{@"chatGuid": chatGuid, @"typing": @YES});
 }
 
 static NSDictionary *handleStopTyping(NSInteger requestId, NSDictionary *params) {
     NSString *chatGuid = params[@"chatGuid"];
+    debugLog(@"handleStopTyping: chatGuid=%@", chatGuid);
     if (!chatGuid.length) return errorResponse(requestId, @"Missing chatGuid");
     IMChat *chat = resolveChatByGuid(chatGuid);
     if (!chat) return errorResponse(requestId, @"Chat not found");
     @try { [chat setLocalUserIsTyping:NO]; }
-    @catch (NSException *ex) { return errorResponse(requestId, ex.reason ?: @"failed"); }
+    @catch (NSException *ex) {
+        debugLog(@"handleStopTyping: exception=%@", ex.reason);
+        return errorResponse(requestId, ex.reason ?: @"failed");
+    }
     return successResponse(requestId, @{@"chatGuid": chatGuid, @"typing": @NO});
 }
 
@@ -1514,17 +2436,14 @@ static NSDictionary *handleMarkChatUnread(NSInteger requestId, NSDictionary *par
     IMChat *chat = resolveChatByGuid(chatGuid);
     if (!chat) return errorResponse(requestId, @"Chat not found");
     @try {
-        if ([chat respondsToSelector:@selector(setUnreadCount:)]) {
-            SEL sel = @selector(setUnreadCount:);
-            NSMethodSignature *sig = [chat methodSignatureForSelector:sel];
-            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-            [inv setSelector:sel];
-            [inv setTarget:chat];
-            NSInteger unreadCount = 1;
-            [inv setArgument:&unreadCount atIndex:2];
-            [inv invoke];
+        // BB-verified macOS 11+ path: `markLastMessageAsUnread` is the
+        // daemon-aware selector that flips read=0 in chat.db AND triggers
+        // UI badge refresh. The `setUnreadCount:` we used previously only
+        // mutated a local KVO counter that didn't persist.
+        if ([chat respondsToSelector:@selector(markLastMessageAsUnread)]) {
+            [chat performSelector:@selector(markLastMessageAsUnread)];
         } else {
-            return errorResponse(requestId, @"setUnreadCount: not available");
+            return errorResponse(requestId, @"markLastMessageAsUnread not available");
         }
     } @catch (NSException *ex) { return errorResponse(requestId, ex.reason ?: @"failed"); }
     return successResponse(requestId, @{@"chatGuid": chatGuid, @"marked_as_unread": @YES});
@@ -1546,9 +2465,13 @@ static NSDictionary *handleAddParticipant(NSInteger requestId, NSDictionary *par
     if (!handle) return errorResponse(requestId, @"Could not vend handle");
 
     @try {
-        SEL sel = @selector(addParticipantsToiMessageChat:reason:);
+        // BB-verified macOS 11+ selector: `inviteParticipantsToiMessageChat:reason:`.
+        // `addParticipantsToiMessageChat:reason:` (what we used before) is not
+        // declared on IMChat; respondsToSelector returned NO and the call
+        // failed with "selector not available".
+        SEL sel = @selector(inviteParticipantsToiMessageChat:reason:);
         if (![chat respondsToSelector:sel]) {
-            return errorResponse(requestId, @"addParticipantsToiMessageChat:reason: not available");
+            return errorResponse(requestId, @"inviteParticipantsToiMessageChat:reason: not available");
         }
         NSMethodSignature *sig = [chat methodSignatureForSelector:sel];
         NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
@@ -1608,10 +2531,15 @@ static NSDictionary *handleSetDisplayName(NSInteger requestId, NSDictionary *par
     IMChat *chat = resolveChatByGuid(chatGuid);
     if (!chat) return errorResponse(requestId, @"Chat not found");
     @try {
-        if ([chat respondsToSelector:@selector(setDisplayName:)]) {
-            [chat performSelector:@selector(setDisplayName:) withObject:newName ?: @""];
+        // BB-verified: `_setDisplayName:` (underscore-prefixed) is the
+        // private mutator that posts the IDS update so other chat members
+        // see the rename. The public `setDisplayName:` we used before was
+        // just the KVO setter — it changed the local property without
+        // propagating, so renames were sender-only.
+        if ([chat respondsToSelector:@selector(_setDisplayName:)]) {
+            [chat performSelector:@selector(_setDisplayName:) withObject:newName ?: @""];
         } else {
-            return errorResponse(requestId, @"setDisplayName: not available");
+            return errorResponse(requestId, @"_setDisplayName: not available");
         }
     } @catch (NSException *ex) { return errorResponse(requestId, ex.reason ?: @"failed"); }
     return successResponse(requestId, @{@"chatGuid": chatGuid, @"name": newName ?: @""});
@@ -1624,26 +2552,36 @@ static NSDictionary *handleUpdateGroupPhoto(NSInteger requestId, NSDictionary *p
     IMChat *chat = resolveChatByGuid(chatGuid);
     if (!chat) return errorResponse(requestId, @"Chat not found");
 
-    NSData *photoData = nil;
-    if (filePath.length) {
-        photoData = [NSData dataWithContentsOfFile:filePath];
-        if (!photoData) {
-            return errorResponse(requestId,
-                [NSString stringWithFormat:@"Could not read photo: %@", filePath]);
-        }
-    }
     @try {
-        SEL sel = @selector(setGroupPhotoData:);
+        // BB-verified: group-photo updates go through the file-transfer
+        // pipeline, not raw bytes. Stage the photo via prepareOutgoingTransfer
+        // (so it lives in IMD's attachments tree), then call
+        // sendGroupPhotoUpdate: with the transfer guid. Passing nil/empty
+        // file path clears the photo.
+        SEL sel = @selector(sendGroupPhotoUpdate:);
         if (![chat respondsToSelector:sel]) {
-            return errorResponse(requestId, @"setGroupPhotoData: not available");
+            return errorResponse(requestId, @"sendGroupPhotoUpdate: not available");
         }
-        [chat performSelector:sel withObject:photoData];
+        if (filePath.length == 0) {
+            [chat performSelector:sel withObject:nil];
+            return successResponse(requestId,
+                @{@"chatGuid": chatGuid, @"cleared": @YES, @"size": @0});
+        }
+        NSURL *fileURL = [NSURL fileURLWithPath:filePath];
+        NSString *prepErr = nil;
+        IMFileTransfer *transfer = prepareOutgoingTransfer(fileURL,
+            [fileURL lastPathComponent], &prepErr);
+        if (!transfer || ![transfer guid].length) {
+            return errorResponse(requestId,
+                prepErr.length ? prepErr : @"Could not prepare group-photo transfer");
+        }
+        [chat performSelector:sel withObject:[transfer guid]];
+        return successResponse(requestId, @{
+            @"chatGuid": chatGuid,
+            @"cleared": @NO,
+            @"transferGuid": [transfer guid]
+        });
     } @catch (NSException *ex) { return errorResponse(requestId, ex.reason ?: @"failed"); }
-    return successResponse(requestId, @{
-        @"chatGuid": chatGuid,
-        @"cleared": @(filePath.length == 0),
-        @"size": @(photoData.length)
-    });
 }
 
 static NSDictionary *handleLeaveChat(NSInteger requestId, NSDictionary *params) {
@@ -1720,8 +2658,8 @@ static NSDictionary *handleCreateChat(NSInteger requestId, NSDictionary *params)
     }
     if (!chat) return errorResponse(requestId, @"Registry could not produce chat");
 
-    if (displayName.length && [chat respondsToSelector:@selector(setDisplayName:)]) {
-        @try { [chat performSelector:@selector(setDisplayName:) withObject:displayName]; }
+    if (displayName.length && [chat respondsToSelector:@selector(_setDisplayName:)]) {
+        @try { [chat performSelector:@selector(_setDisplayName:) withObject:displayName]; }
         @catch (__unused NSException *ex) {}
     }
 
@@ -1733,7 +2671,7 @@ static NSDictionary *handleCreateChat(NSInteger requestId, NSDictionary *params)
                                           NSMakeRange(0, body.length),
                                           nil, @[], NO, NO);
             if (imMessage) {
-                [chat performSelector:@selector(sendMessage:) withObject:imMessage];
+                dispatchIMMessageInChat(chat, imMessage);
                 messageGuid = lastSentMessageGuid(chat);
             }
         } @catch (__unused NSException *ex) {}
