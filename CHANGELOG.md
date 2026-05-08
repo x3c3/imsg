@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.8.1 - Unreleased
+
 ## 0.8.0 - 2026-05-08
 
 ### Linux Read-Only Preview
