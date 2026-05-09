@@ -63,9 +63,9 @@ jobs:
             shopt -s nullglob
             bundles=( *.bundle )
             if [ ${#bundles[@]} -gt 0 ]; then
-              zip -r imsg-macos.zip imsg "${bundles[@]}"
+              zip -r imsg-macos.zip imsg imsg-bridge-helper.dylib "${bundles[@]}"
             else
-              zip -r imsg-macos.zip imsg
+              zip -r imsg-macos.zip imsg imsg-bridge-helper.dylib
             fi
           )
 

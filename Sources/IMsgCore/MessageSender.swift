@@ -87,7 +87,15 @@ public struct MessageSender {
     #endif
   }
 
+  public static func stageAttachmentForMessagesApp(at path: String) throws -> String {
+    try stageAttachment(at: path, destinationRoot: defaultAttachmentsSubdirectory())
+  }
+
   private func stageAttachment(at path: String) throws -> String {
+    try Self.stageAttachment(at: path, destinationRoot: attachmentsSubdirectoryProvider())
+  }
+
+  private static func stageAttachment(at path: String, destinationRoot: URL) throws -> String {
     let expandedPath = (path as NSString).expandingTildeInPath
     let sourceURL = URL(fileURLWithPath: expandedPath)
     let fileManager = FileManager.default
@@ -95,9 +103,8 @@ public struct MessageSender {
       throw IMsgError.appleScriptFailure("Attachment not found at \(sourceURL.path)")
     }
 
-    let subdirectory = attachmentsSubdirectoryProvider()
-    try fileManager.createDirectory(at: subdirectory, withIntermediateDirectories: true)
-    let attachmentDir = subdirectory.appendingPathComponent(
+    try fileManager.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+    let attachmentDir = destinationRoot.appendingPathComponent(
       UUID().uuidString,
       isDirectory: true
     )

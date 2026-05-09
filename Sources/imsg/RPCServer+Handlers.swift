@@ -1,6 +1,20 @@
 import Foundation
 import IMsgCore
 
+private enum RPCSendTransport: String {
+  case auto
+  case bridge
+  case applescript
+
+  static func parse(_ raw: String?) throws -> RPCSendTransport {
+    let value = raw?.lowercased() ?? "auto"
+    guard let transport = RPCSendTransport(rawValue: value) else {
+      throw RPCError.invalidParams("invalid transport")
+    }
+    return transport
+  }
+}
+
 extension RPCServer {
   func handleChatsList(id: Any?, params: [String: Any]) async throws {
     let limit = intParam(params["limit"]) ?? 20
@@ -157,6 +171,7 @@ extension RPCServer {
     guard let service = MessageService(rawValue: serviceRaw) else {
       throw RPCError.invalidParams("invalid service")
     }
+    let transport = try RPCSendTransport.parse(stringParam(params["transport"]))
     let region = stringParam(params["region"]) ?? "US"
     let rawRecipient = stringParam(params["to"]) ?? ""
     let rawInput = ChatTargetInput(
@@ -200,6 +215,9 @@ extension RPCServer {
     if input.hasChatTarget && resolvedTarget.preferredIdentifier == nil {
       throw RPCError.invalidParams("missing chat identifier or guid")
     }
+    let directChatInfo =
+      input.hasChatTarget
+      ? nil : try resolveDirectChatInfo(recipient: input.recipient, service: service)
 
     let options = MessageSendOptions(
       recipient: input.recipient,
@@ -211,11 +229,43 @@ extension RPCServer {
       chatGUID: resolvedTarget.chatGUID
     )
     let sentAt = Date()
+
+    if let bridgeChatGUID = bridgeChatGUID(
+      resolvedTarget: resolvedTarget, directChatInfo: directChatInfo),
+      transport != .applescript,
+      transport == .bridge || isBridgeReady()
+    {
+      do {
+        let data = try await sendViaBridge(
+          chatGUID: bridgeChatGUID,
+          text: text,
+          file: file
+        )
+        var result: [String: Any] = ["ok": true, "transport": "bridge"]
+        if let guid = data["messageGuid"] as? String, !guid.isEmpty {
+          result["guid"] = guid
+        }
+        respond(id: id, result: result)
+        return
+      } catch let err as RPCError {
+        if transport == .bridge {
+          throw err
+        }
+      } catch {
+        if transport == .bridge {
+          throw RPCError.internalError(String(describing: error))
+        }
+      }
+    } else if transport == .bridge {
+      throw RPCError.invalidParams("bridge transport requires an existing chat target")
+    }
+
     try sendMessage(options)
 
     let verificationChatID =
       input.chatID
       ?? resolvedTarget.preferredIdentifier.flatMap { try? store.chatInfo(matchingTarget: $0)?.id }
+      ?? directChatInfo?.id
     let sentMessage = try? await resolveSentMessage(store, options, verificationChatID, sentAt)
     if sentMessage == nil {
       try SentMessageVerifier.throwIfMisroutedChatSend(
@@ -224,7 +274,7 @@ extension RPCServer {
         sentAt: sentAt
       )
     }
-    var result: [String: Any] = ["ok": true]
+    var result: [String: Any] = ["ok": true, "transport": "applescript"]
     if let sentMessage {
       result["id"] = sentMessage.rowID
       if !sentMessage.guid.isEmpty {
@@ -265,19 +315,28 @@ extension RPCServer {
       throw RPCError.invalidParams("missing chat identifier or guid")
     } else {
       do {
-        identifier = try ChatTargetResolver.directTypingIdentifier(
-          recipient: input.recipient,
-          serviceRaw: serviceRaw,
-          invalidServiceError: { RPCError.invalidParams($0) }
-        )
+        guard let service = MessageService(rawValue: serviceRaw.lowercased()) else {
+          throw RPCError.invalidParams(serviceRaw)
+        }
+        if let info = try resolveDirectChatInfo(recipient: input.recipient, service: service),
+          let preferred = bridgeChatGUID(resolvedTarget: nil, directChatInfo: info)
+        {
+          identifier = preferred
+        } else {
+          identifier = try ChatTargetResolver.directTypingIdentifier(
+            recipient: input.recipient,
+            serviceRaw: serviceRaw,
+            invalidServiceError: { RPCError.invalidParams($0) }
+          )
+        }
       } catch let err as RPCError {
         throw err
       }
     }
     if isTyping {
-      try TypingIndicator.startTyping(chatIdentifier: identifier)
+      try startTyping(identifier)
     } else {
-      try TypingIndicator.stopTyping(chatIdentifier: identifier)
+      try stopTyping(identifier)
     }
     respond(id: id, result: ["ok": true])
   }
@@ -313,6 +372,46 @@ extension RPCServer {
     }
     try await IMCoreBridge.shared.markAsRead(handle: handle)
     respond(id: id, result: ["ok": true])
+  }
+
+  private func resolveDirectChatInfo(recipient: String, service: MessageService) throws -> ChatInfo?
+  {
+    for candidate in ChatTargetResolver.directChatCandidates(recipient: recipient, service: service)
+    {
+      if let info = try store.chatInfo(matchingTarget: candidate) {
+        return info
+      }
+    }
+    return nil
+  }
+
+  private func bridgeChatGUID(
+    resolvedTarget: ResolvedChatTarget?,
+    directChatInfo: ChatInfo?
+  ) -> String? {
+    if let guid = resolvedTarget?.chatGUID, !guid.isEmpty { return guid }
+    if let identifier = resolvedTarget?.chatIdentifier, !identifier.isEmpty { return identifier }
+    if let guid = directChatInfo?.guid, !guid.isEmpty { return guid }
+    if let identifier = directChatInfo?.identifier, !identifier.isEmpty { return identifier }
+    return nil
+  }
+
+  private func sendViaBridge(
+    chatGUID: String,
+    text: String,
+    file: String
+  ) async throws -> [String: Any] {
+    if !file.isEmpty {
+      guard text.isEmpty else {
+        throw RPCError.invalidParams("bridge transport does not support text and file together")
+      }
+      let stagedFile = try MessageSender.stageAttachmentForMessagesApp(at: file)
+      return try await bridgeInvoker(
+        .sendAttachment,
+        ["chatGuid": chatGUID, "filePath": stagedFile, "isAudioMessage": false]
+      )
+    }
+    return try await bridgeInvoker(.sendMessage, ["chatGuid": chatGUID, "message": text])
   }
 }
 

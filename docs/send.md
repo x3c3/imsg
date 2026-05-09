@@ -79,7 +79,7 @@ Defaults to `US`. Pass an ISO 3166-1 alpha-2 country code to normalize locally-f
 
 Default text mode prints `sent` on success. JSON mode emits `{"status":"sent"}`.
 
-The [JSON-RPC `send` method](rpc.md#send) goes further: it includes the rowid and GUID of the inserted message when it can observe the row in `chat.db` after Messages accepts the send. Use RPC when you need a verified send acknowledgment.
+The [JSON-RPC `send` method](rpc.md#send) goes further: it includes the rowid and GUID of the inserted message when it can observe the row in `chat.db` after Messages accepts the send. Use RPC when you need a verified send acknowledgment. RPC `send` also accepts `transport` (`auto`, `bridge`, or `applescript`) for callers that want to prefer or require the IMCore bridge.
 
 ## Tahoe ghost-row protection
 

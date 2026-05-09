@@ -37,12 +37,7 @@ public final class IMCoreBridge: @unchecked Sendable {
 
   /// Whether the dylib exists on disk (does not check if Messages.app is running).
   public var isAvailable: Bool {
-    let possiblePaths = [
-      "/usr/local/lib/imsg-bridge-helper.dylib",
-      ".build/release/imsg-bridge-helper.dylib",
-      ".build/debug/imsg-bridge-helper.dylib",
-    ]
-    return possiblePaths.contains { FileManager.default.fileExists(atPath: $0) }
+    BridgeHelperLocator.resolve() != nil
   }
 
   private init() {}
@@ -76,27 +71,14 @@ public final class IMCoreBridge: @unchecked Sendable {
 
   /// Check availability and return a diagnostic message.
   public func checkAvailability() -> (available: Bool, message: String) {
-    let possiblePaths = [
-      "/usr/local/lib/imsg-bridge-helper.dylib",
-      ".build/release/imsg-bridge-helper.dylib",
-      ".build/debug/imsg-bridge-helper.dylib",
-    ]
-
-    var dylibPath: String?
-    for path in possiblePaths {
-      if FileManager.default.fileExists(atPath: path) {
-        dylibPath = path
-        break
-      }
-    }
-
-    guard dylibPath != nil else {
+    guard BridgeHelperLocator.resolve() != nil else {
       return (
         false,
         """
-        imsg-bridge-helper.dylib not found. To build:
-        1. make build-dylib
-        2. Restart imsg
+        imsg-bridge-helper.dylib not found. Searched:
+        \(BridgeHelperLocator.searchPaths().map { "- \($0)" }.joined(separator: "\n"))
+
+        Source installs can build it with `make build-dylib`.
 
         Note: Advanced features require:
         - SIP disabled (for DYLD injection)
@@ -115,8 +97,9 @@ public final class IMCoreBridge: @unchecked Sendable {
 
         To enable advanced features:
         1. Disable SIP in Recovery mode (`csrutil disable`)
-        2. Run `make build-dylib`
-        3. Run `imsg launch`
+        2. Run `imsg launch`
+
+        Source installs also need `make build-dylib` before launching.
         """
       )
     case .unknown(let details):

@@ -26,10 +26,12 @@ description: "Cutting an imsg release: changelog, version bump, signed/notarized
    - `scripts/sign-and-notarize.sh` (outputs `/tmp/imsg-macos.zip` by default)
    - Linux release archives are built by `.github/workflows/release.yml` with
      `scripts/build-linux.sh` and uploaded as `imsg-linux-x86_64.tar.gz`.
-   - Verify the zip contains required SwiftPM bundles (e.g. `PhoneNumberKit_PhoneNumberKit.bundle`).
+   - Verify the zip contains `imsg-bridge-helper.dylib` and required SwiftPM
+     bundles (e.g. `PhoneNumberKit_PhoneNumberKit.bundle`).
    - Verify entitlements/signing:
      - `unzip -q /tmp/imsg-macos.zip -d /tmp/imsg-check`
      - `codesign -d --entitlements :- /tmp/imsg-check/imsg`
+     - `codesign --verify --strict --verbose=4 /tmp/imsg-check/imsg-bridge-helper.dylib`
      - `spctl -a -t exec -vv /tmp/imsg-check/imsg`
 4. Tag, push, and publish
    - `git tag -a vX.Y.Z -m "vX.Y.Z"`

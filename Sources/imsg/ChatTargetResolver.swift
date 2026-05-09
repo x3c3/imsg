@@ -71,6 +71,32 @@ enum ChatTargetResolver {
     return "\(prefix);-;\(recipient)"
   }
 
+  static func directChatCandidates(recipient: String, service: MessageService) -> [String] {
+    let trimmed = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return [] }
+
+    var candidates: [String] = []
+    func append(_ value: String) {
+      if !candidates.contains(value) {
+        candidates.append(value)
+      }
+    }
+
+    switch service {
+    case .sms:
+      append("SMS;-;\(trimmed)")
+    case .imessage:
+      append("iMessage;-;\(trimmed)")
+      append("any;-;\(trimmed)")
+    case .auto:
+      append("iMessage;-;\(trimmed)")
+      append("any;-;\(trimmed)")
+      append("SMS;-;\(trimmed)")
+    }
+    append(trimmed)
+    return candidates
+  }
+
   static func looksLikeContactName(_ recipient: String) -> Bool {
     let trimmed = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty { return false }

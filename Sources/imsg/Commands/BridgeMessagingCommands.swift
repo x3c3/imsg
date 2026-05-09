@@ -240,53 +240,6 @@ enum SendMultipartCommand {
   }
 }
 
-// MARK: - send-attachment
-
-enum SendAttachmentCommand {
-  static let spec = CommandSpec(
-    name: "send-attachment",
-    abstract: "Send a file attachment via the IMCore bridge",
-    discussion: nil,
-    signature: CommandSignatures.withRuntimeFlags(
-      CommandSignature(
-        options: CommandSignatures.baseOptions() + [
-          .make(label: "chat", names: [.long("chat")], help: "chat guid"),
-          .make(label: "file", names: [.long("file")], help: "absolute path to file"),
-        ],
-        flags: [
-          .make(label: "audio", names: [.long("audio")], help: "send as audio message")
-        ]
-      )
-    ),
-    usageExamples: [
-      "imsg send-attachment --chat 'iMessage;-;+15551234567' --file ~/Pictures/me.jpg"
-    ]
-  ) { values, runtime in
-    try await run(values: values, runtime: runtime)
-  }
-
-  static func run(values: ParsedValues, runtime: RuntimeOptions) async throws {
-    guard let chat = values.option("chat"), !chat.isEmpty else {
-      throw ParsedValuesError.missingOption("chat")
-    }
-    guard let file = values.option("file"), !file.isEmpty else {
-      throw ParsedValuesError.missingOption("file")
-    }
-    let expanded = (file as NSString).expandingTildeInPath
-    let params: [String: Any] = [
-      "chatGuid": chat,
-      "filePath": expanded,
-      "isAudioMessage": values.flag("audio"),
-    ]
-    _ = try await BridgeOutput.invokeAndEmit(
-      action: .sendAttachment, params: params, runtime: runtime
-    ) { data in
-      let guid = (data["messageGuid"] as? String) ?? ""
-      return "send-attachment: queued (guid=\(guid))"
-    }
-  }
-}
-
 // MARK: - react (BB-style; complements existing AS-backed `react`)
 
 enum BridgeReactCommand {

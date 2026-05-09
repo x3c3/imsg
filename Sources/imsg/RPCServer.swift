@@ -8,6 +8,11 @@ typealias SentMessageResolver = (
   _ sentAt: Date
 ) async throws -> Message?
 
+typealias BridgeInvoker = (
+  _ action: BridgeAction,
+  _ params: [String: Any]
+) async throws -> [String: Any]
+
 protocol RPCOutput: Sendable {
   func sendResponse(id: Any, result: Any)
   func sendError(id: Any?, error: RPCError)
@@ -47,6 +52,10 @@ final class RPCServer {
   let verbose: Bool
   let sendMessage: (MessageSendOptions) throws -> Void
   let resolveSentMessage: SentMessageResolver
+  let bridgeInvoker: BridgeInvoker
+  let isBridgeReady: () -> Bool
+  let startTyping: (String) throws -> Void
+  let stopTyping: (String) throws -> Void
   let contactResolver: any ContactResolving
 
   init(
@@ -55,6 +64,16 @@ final class RPCServer {
     output: RPCOutput = RPCWriter(),
     sendMessage: @escaping (MessageSendOptions) throws -> Void = { try MessageSender().send($0) },
     resolveSentMessage: @escaping SentMessageResolver = RPCServer.resolveSentMessage,
+    invokeBridge: @escaping BridgeInvoker = { action, params in
+      try await IMsgBridgeClient.shared.invoke(action: action, params: params)
+    },
+    isBridgeReady: @escaping () -> Bool = { IMsgBridgeClient.shared.isReady() },
+    startTyping: @escaping (String) throws -> Void = {
+      try TypingIndicator.startTyping(chatIdentifier: $0)
+    },
+    stopTyping: @escaping (String) throws -> Void = {
+      try TypingIndicator.stopTyping(chatIdentifier: $0)
+    },
     contactResolver: any ContactResolving = NoOpContactResolver()
   ) {
     self.store = store
@@ -64,6 +83,10 @@ final class RPCServer {
     self.output = output
     self.sendMessage = sendMessage
     self.resolveSentMessage = resolveSentMessage
+    self.bridgeInvoker = invokeBridge
+    self.isBridgeReady = isBridgeReady
+    self.startTyping = startTyping
+    self.stopTyping = stopTyping
     self.contactResolver = contactResolver
   }
 

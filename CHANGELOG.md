@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.8.1 - Unreleased
+## 0.8.1 - 2026-05-09
+
+### Release Packaging
+- fix: include the IMCore bridge helper dylib in macOS release archives and
+  search Homebrew install paths for brew-installed advanced features (#111,
+  thanks @omarshahine).
+
+### Messaging
+- fix: route JSON-RPC `send` through the IMCore bridge when it is available,
+  with automatic AppleScript fallback and an explicit `transport` override
+  (#108).
+- fix: resolve JSON-RPC `typing` direct recipients against existing chat GUIDs
+  before synthesizing an `iMessage`/`SMS` prefix (#109).
+- fix: stage bridge attachments before dylib sends and let
+  `send-attachment --transport auto` fall back to AppleScript for normal files
+  when the bridge is unavailable (#110, thanks @omarshahine).
 
 ## 0.8.0 - 2026-05-08
 

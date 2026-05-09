@@ -164,5 +164,10 @@ Send and receive verification:
 
 ```json
 {"jsonrpc":"2.0","id":"3","method":"send","params":{"to":"+14155551212","text":"hi"}}
-{"jsonrpc":"2.0","id":"3","result":{"ok":true,"id":1979,"guid":"8DF..."}}
+{"jsonrpc":"2.0","id":"3","result":{"ok":true,"transport":"applescript","id":1979,"guid":"8DF..."}}
 ```
+
+`send` accepts `transport: "auto" | "bridge" | "applescript"`. `auto`
+uses the IMCore bridge for existing chats when it is running, then falls back
+to AppleScript. Use `bridge` when the caller requires private-API delivery and
+should fail instead of falling back.

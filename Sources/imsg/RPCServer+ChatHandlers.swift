@@ -128,7 +128,7 @@ extension RPCServer {
     action: BridgeAction, params: [String: Any]
   ) async throws -> [String: Any] {
     do {
-      return try await IMsgBridgeClient.shared.invoke(action: action, params: params)
+      return try await bridgeInvoker(action, params)
     } catch {
       throw RPCError.internalError(String(describing: error))
     }

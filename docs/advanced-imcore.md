@@ -15,10 +15,12 @@ You almost certainly do not need any of this for normal use.
 - `imsg typing --to <handle> [--duration 5s] [--stop true]` — show or stop the typing indicator.
 - `imsg launch [--dylib <path>] [--kill-only]` — launch Messages.app with the helper dylib injected.
 - `imsg status` — read-only IMCore bridge status.
+- `imsg send-attachment --chat <guid> --file <path>` — prefers the bridge for
+  private attachment sends, with AppleScript fallback for normal files.
 
 ## Why they're separate
 
-These features depend on private IMCore APIs that aren't reachable from outside the Messages process. To touch them, `imsg` injects a small helper dylib into Messages.app via `DYLD_INSERT_LIBRARIES` (built by `make build-dylib`).
+These features depend on private IMCore APIs that aren't reachable from outside the Messages process. To touch them, `imsg` injects a small helper dylib into Messages.app via `DYLD_INSERT_LIBRARIES`. Homebrew installs that helper when the release archive includes it; source builds can create it with `make build-dylib`.
 
 That injection requires three things to be true on the target machine:
 
@@ -31,9 +33,14 @@ You should expect at least one of these gates to be active on a current macOS in
 ## Building and launching
 
 ```bash
-make build-dylib   # produces .build/release/imsg-bridge-helper.dylib (arm64e)
 imsg launch        # launches Messages.app with the dylib injected
 imsg status        # confirms the bridge is up
+```
+
+Source installs need one extra step first:
+
+```bash
+make build-dylib   # produces .build/release/imsg-bridge-helper.dylib (arm64e)
 ```
 
 `imsg launch` refuses to inject when SIP is enabled. There's no override.
@@ -97,3 +104,9 @@ The honest answer for most readers: **don't**. The macOS 26 limits make these fe
 - You need a typing-indicator demo on a single hand-tuned machine.
 
 For agent integrations, prefer the standard CLI surfaces (`send`, `react`, `watch`). They cover the realistic interaction surface without touching SIP.
+
+`send-attachment --transport auto` is the one bridge command that can still
+complete without a running bridge for normal file attachments: it stages the
+file under Messages' attachments directory, tries the dylib path first, then
+falls back to AppleScript. `--audio` remains bridge-only because AppleScript
+cannot preserve the private audio-message flag.

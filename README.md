@@ -236,10 +236,11 @@ workflows do not require IMCore injection.
 
 Advanced features such as `read`, `typing`, `launch`, bridge-backed rich
 send, message mutation, and chat management are opt-in. They require SIP to
-be disabled and a helper dylib to be injected into Messages.app:
+be disabled and a helper dylib to be injected into Messages.app. Homebrew
+installs the helper from macOS release archives; source builds can run
+`make build-dylib` first.
 
 ```bash
-make build-dylib
 imsg launch
 imsg status
 ```
@@ -285,7 +286,7 @@ imsg send-multipart --chat 'iMessage;+;chat0000' \
             {"text":"there","textFormatting":[{"start":0,"length":5,"styles":["bold"]}]}]'
 
 # Attachment (file or audio)
-imsg send-attachment --chat ... --file ~/Pictures/img.jpg
+imsg send-attachment --chat ... --file ~/Pictures/img.jpg --transport auto
 imsg send-attachment --chat ... --file ~/audio.caf --audio
 
 # Bridge tapback (custom emoji + remove supported here, unlike `imsg react`)

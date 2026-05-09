@@ -56,16 +56,8 @@ import Foundation
     public var dylibPath: String = ".build/release/imsg-bridge-helper.dylib"
 
     private init() {
-      let possiblePaths = [
-        "/usr/local/lib/imsg-bridge-helper.dylib",
-        ".build/release/imsg-bridge-helper.dylib",
-        ".build/debug/imsg-bridge-helper.dylib",
-      ]
-      for path in possiblePaths {
-        if FileManager.default.fileExists(atPath: path) {
-          self.dylibPath = path
-          break
-        }
+      if let path = BridgeHelperLocator.resolve() {
+        self.dylibPath = path
       }
     }
 
