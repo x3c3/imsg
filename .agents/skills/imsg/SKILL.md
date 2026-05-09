@@ -1,6 +1,6 @@
 ---
 name: imsg
-description: Use for local iMessage/SMS archive reads, iMessage contact lookup, visible Messages.app contact lookup, chat history, watch, and explicitly requested sends.
+description: "iMessage/SMS: local archive, contacts, chat history, watch, requested sends."
 ---
 
 # imsg
