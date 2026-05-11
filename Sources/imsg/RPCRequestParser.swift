@@ -6,13 +6,18 @@ struct RPCRequest {
   let params: [String: Any]
 }
 
-struct RPCParseFailure: Error {
+struct RPCParseFailure {
   let id: Any?
   let error: RPCError
 }
 
+enum RPCRequestParseResult {
+  case success(RPCRequest)
+  case failure(RPCParseFailure)
+}
+
 enum RPCRequestParser {
-  static func parse(_ line: String) -> Result<RPCRequest, RPCParseFailure> {
+  static func parse(_ line: String) -> RPCRequestParseResult {
     guard let data = line.data(using: .utf8) else {
       return .failure(RPCParseFailure(id: nil, error: RPCError.parseError("invalid utf8")))
     }
