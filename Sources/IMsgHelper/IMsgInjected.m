@@ -1297,6 +1297,30 @@ static void dispatchIMMessageInChat(IMChat *chat, id message) {
     [chat performSelector:@selector(sendMessage:) withObject:message];
 }
 
+static unsigned long long flagsForMessagePayload(NSAttributedString *subject,
+                                                 NSArray *fileTransferGuids,
+                                                 BOOL isAudioMessage) {
+    if (isAudioMessage) {
+        return 0x300005ULL;
+    }
+    if (subject.length) {
+        return 0x10000dULL;
+    }
+    if (fileTransferGuids.count > 0) {
+        return 0x100005ULL;
+    }
+    return 0x100005ULL;
+}
+
+static unsigned long long flagsForAssociatedMessagePayload(NSAttributedString *subject,
+                                                           NSArray *fileTransferGuids,
+                                                           BOOL isAudioMessage) {
+    if (fileTransferGuids.count == 0) {
+        return 0x5ULL;
+    }
+    return flagsForMessagePayload(subject, fileTransferGuids, isAudioMessage);
+}
+
 /// Build an IMMessage suitable for `[chat sendMessage:]`. Handles plain text,
 /// optional subject, optional effect (`com.apple.MobileSMS.expressivesend.*`),
 /// optional reply target (`selectedMessageGuid`), and ddScan flag.
@@ -1350,7 +1374,9 @@ static id buildIMMessage(NSAttributedString *body,
         // longer initializer on the result.
         SEL macos26Sel = @selector(initWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:associatedMessageGUID:associatedMessageType:associatedMessageRange:messageSummaryInfo:);
         if ([messageClass instancesRespondToSelector:macos26Sel]) {
-            unsigned long long flags = 0x5;
+            unsigned long long flags = flagsForAssociatedMessagePayload(subject,
+                                                                        fileTransferGuids,
+                                                                        isAudioMessage);
             id msg = [[messageClass alloc] init];
             NSMethodSignature *sig =
                 [messageClass instanceMethodSignatureForSelector:macos26Sel];
@@ -1376,7 +1402,14 @@ static id buildIMMessage(NSAttributedString *body,
             id result = invokeReturningObject(inv);
             debugLog(@"buildIMMessage: reaction via macos26Sel result=%@",
                      result ? NSStringFromClass([result class]) : @"(nil)");
-            if (result) return result;
+            if (result) {
+                if (threadIdentifier
+                    && [result respondsToSelector:@selector(setThreadIdentifier:)]) {
+                    [result performSelector:@selector(setThreadIdentifier:)
+                                 withObject:threadIdentifier];
+                }
+                return result;
+            }
         }
 
         // Legacy 17-arg form for older macOS.
@@ -1386,7 +1419,9 @@ static id buildIMMessage(NSAttributedString *body,
                  responds, associatedMessageType, associatedMessageGuid);
         id msg = [messageClass alloc];
         if ([msg respondsToSelector:sel]) {
-            unsigned long long flags = 0x5;
+            unsigned long long flags = flagsForAssociatedMessagePayload(subject,
+                                                                        fileTransferGuids,
+                                                                        isAudioMessage);
             NSMethodSignature *sig = [messageClass instanceMethodSignatureForSelector:sel];
             NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
             [inv setSelector:sel];
@@ -1412,6 +1447,11 @@ static id buildIMMessage(NSAttributedString *body,
             [inv invoke];
             __unsafe_unretained id result = nil;
             [inv getReturnValue:&result];
+            if (threadIdentifier
+                && [result respondsToSelector:@selector(setThreadIdentifier:)]) {
+                [result performSelector:@selector(setThreadIdentifier:)
+                             withObject:threadIdentifier];
+            }
             return result;
         }
     }
@@ -1422,14 +1462,8 @@ static id buildIMMessage(NSAttributedString *body,
     // older releases.
     SEL bbSendSel = @selector(initWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:balloonBundleID:payloadData:expressiveSendStyleID:);
     if ([messageClass instancesRespondToSelector:bbSendSel]) {
-        unsigned long long flags;
-        if (isAudioMessage) {
-            flags = 0x300005ULL;
-        } else if (subject.length) {
-            flags = 0x10000dULL;
-        } else {
-            flags = 0x100005ULL;
-        }
+        unsigned long long flags = flagsForMessagePayload(subject, fileTransferGuids,
+                                                          isAudioMessage);
         id m = [[messageClass alloc] init];
         NSMethodSignature *sig = [messageClass instanceMethodSignatureForSelector:bbSendSel];
         NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
@@ -1464,14 +1498,8 @@ static id buildIMMessage(NSAttributedString *body,
     SEL sel = @selector(initIMMessageWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:balloonBundleID:payloadData:expressiveSendStyleID:);
     id msg = [messageClass alloc];
     if ([msg respondsToSelector:sel]) {
-        unsigned long long flags;
-        if (isAudioMessage) {
-            flags = 0x300005ULL;
-        } else if (subject.length) {
-            flags = 0x10000dULL;
-        } else {
-            flags = 0x100005ULL;
-        }
+        unsigned long long flags = flagsForMessagePayload(subject, fileTransferGuids,
+                                                          isAudioMessage);
         NSMethodSignature *sig = [messageClass instanceMethodSignatureForSelector:sel];
         NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
         [inv setSelector:sel];
@@ -1888,67 +1916,6 @@ static void retargetPreparedTransfer(id ftc, IMFileTransfer *transfer,
     }
 }
 
-static NSString *saveAttachmentForTransfer(id pac, IMFileTransfer *transfer,
-                                           NSString *chatGuid, NSString **outErr) {
-    SEL saveSel = @selector(saveAttachmentsForTransfer:chatGUID:storeAtExternalLocation:completion:);
-    if (!pac || ![pac respondsToSelector:saveSel]) {
-        return nil;
-    }
-
-    __block BOOL done = NO;
-    __block NSString *savedPath = nil;
-    __block id saveError = nil;
-    // Runtime probe on macOS 26 shows the completion receives:
-    //   primaryPath, error, externalPath
-    // `externalPath` is only populated when `storeAtExternalLocation:YES`.
-    void (^completion)(id, id, id) = ^(id primaryPath, id error, id externalPath) {
-        if ([primaryPath isKindOfClass:[NSString class]] && [(NSString *)primaryPath length]) {
-            savedPath = primaryPath;
-        } else if ([externalPath isKindOfClass:[NSString class]]
-                   && [(NSString *)externalPath length]) {
-            savedPath = externalPath;
-        }
-        saveError = error;
-        done = YES;
-    };
-
-    NSMethodSignature *sig = [pac methodSignatureForSelector:saveSel];
-    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-    [inv setSelector:saveSel];
-    [inv setTarget:pac];
-    __unsafe_unretained IMFileTransfer *xfer = transfer;
-    __unsafe_unretained NSString *cg = chatGuid;
-    BOOL external = chatGuid.length > 0;
-    // Call via NSInvocation because this private selector and block signature
-    // are absent from public SDK headers.
-    [inv setArgument:&xfer atIndex:2];
-    [inv setArgument:&cg atIndex:3];
-    [inv setArgument:&external atIndex:4];
-    [inv setArgument:&completion atIndex:5];
-    [inv retainArguments];
-    [inv invoke];
-
-    // The completion is usually synchronous, but keep the same bounded run-loop
-    // pump used by other bridge helpers in case IMDPersistence hops queues.
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
-    while (!done && [deadline timeIntervalSinceNow] > 0) {
-        [[NSRunLoop currentRunLoop]
-            runMode:NSDefaultRunLoopMode
-         beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
-    }
-
-    debugLog(@"prepareOutgoingTransfer: saveAttachments path=%@ error=%@ done=%d",
-             savedPath ?: @"(nil)", saveError ?: @"(nil)", done);
-    if (!done) {
-        if (outErr) *outErr = @"Timed out staging attachment";
-        return nil;
-    }
-    if (saveError && outErr) {
-        *outErr = [NSString stringWithFormat:@"Failed to stage attachment: %@", saveError];
-    }
-    return savedPath;
-}
-
 static IMFileTransfer *prepareOutgoingTransfer(NSURL *originalURL, NSString *filename,
                                                NSString *chatGuid, NSString **outErr) {
     Class ftcClass = NSClassFromString(@"IMFileTransferCenter");
@@ -2016,44 +1983,59 @@ static IMFileTransfer *prepareOutgoingTransfer(NSURL *originalURL, NSString *fil
             debugLog(@"prepareOutgoingTransfer: persistentPath=%@ filename=%@",
                      persistentPath ?: @"(nil)", fn);
 
+            NSError *legacyErr = nil;
+            BOOL legacyStaged = NO;
             if (persistentPath.length) {
                 NSURL *persistentURL = [NSURL fileURLWithPath:persistentPath];
                 NSURL *parent = [persistentURL URLByDeletingLastPathComponent];
-                NSError *folderErr = nil;
                 [[NSFileManager defaultManager] createDirectoryAtURL:parent
                                          withIntermediateDirectories:YES
                                                           attributes:nil
-                                                               error:&folderErr];
-                if (folderErr) {
-                    if (outErr) *outErr = [NSString stringWithFormat:
-                        @"Failed to create attachment dir: %@", folderErr.localizedDescription];
-                    return nil;
+                                                               error:&legacyErr];
+                if (!legacyErr) {
+                    // If the destination already exists (e.g., re-send of the
+                    // same file), nuke the stale copy so copyItem doesn't fail.
+                    if ([[NSFileManager defaultManager] fileExistsAtPath:persistentPath]) {
+                        [[NSFileManager defaultManager] removeItemAtURL:persistentURL error:NULL];
+                    }
+                    [[NSFileManager defaultManager] copyItemAtURL:originalURL
+                                                            toURL:persistentURL
+                                                            error:&legacyErr];
+                    if (!legacyErr) {
+                        retargetPreparedTransfer(ftc, transfer, transferGuid, persistentPath);
+                        legacyStaged = YES;
+                    }
                 }
-                // If the destination already exists (e.g., re-send of the same
-                // file), nuke the stale copy so copyItem doesn't fail.
-                if ([[NSFileManager defaultManager] fileExistsAtPath:persistentPath]) {
-                    [[NSFileManager defaultManager] removeItemAtURL:persistentURL error:NULL];
-                }
-                NSError *copyErr = nil;
-                [[NSFileManager defaultManager] copyItemAtURL:originalURL
-                                                        toURL:persistentURL
-                                                        error:&copyErr];
-                if (copyErr) {
-                    if (outErr) *outErr = [NSString stringWithFormat:
-                        @"Failed to copy attachment: %@", copyErr.localizedDescription];
-                    return nil;
-                }
-                retargetPreparedTransfer(ftc, transfer, transferGuid, persistentPath);
-            } else {
-                // Newer IMDPersistence builds also expose a block-based save
-                // API. Use it as a fallback when the older path helper refuses
-                // to return a staging path for this transfer.
-                NSString *savedPath = saveAttachmentForTransfer(pac, transfer, chatGuid, outErr);
-                if (savedPath.length) {
-                    retargetPreparedTransfer(ftc, transfer, transferGuid, savedPath);
-                } else if (outErr && !*outErr) {
-                    *outErr = @"Could not stage attachment";
-                    return nil;
+            }
+            if (!legacyStaged) {
+                // IMDPersistence on macOS 26 / Tahoe returns either nil (when
+                // chatGUID is nil, per BlueBubbles' reference implementation)
+                // or an iOS-style /var/mobile/... path (when chatGUID is
+                // non-nil) that Messages.app can't actually write to. The
+                // _alternative_ fallback that some IMDPersistence builds
+                // expose, saveAttachmentsForTransfer:chatGUID:storeAtExternalLocation:completion:,
+                // returns a path inside the Messages.app sandbox container
+                // that imagent can't read from for outgoing sends (the row
+                // lands in chat.db but error=25, is_sent=0).
+                //
+                // The transfer was created via guidForNewOutgoingTransferWithLocalURL:
+                // with the source already living under
+                // ~/Library/Messages/Attachments/imsg/<UUID>/<file> (Swift's
+                // MessageSender.stageAttachmentForMessagesApp puts it there
+                // before we get here). That path is in the user-visible
+                // Attachments tree, which imagent reads happily — BlueBubbles
+                // takes the same approach when its persistentPath comes back
+                // nil. So when the legacy retarget can't run, leave the
+                // transfer pointing at its original localURL and let
+                // registerTransferWithDaemon: pick it up directly.
+                if (legacyErr) {
+                    debugLog(@"prepareOutgoingTransfer: legacy path %@ unusable (%@); "
+                             @"keeping original localURL=%@ for registerTransferWithDaemon",
+                             persistentPath ?: @"(nil)", legacyErr.localizedDescription,
+                             originalURL.path);
+                } else {
+                    debugLog(@"prepareOutgoingTransfer: no persistent path; keeping "
+                             @"original localURL=%@", originalURL.path);
                 }
             }
         }
@@ -2075,11 +2057,19 @@ static IMFileTransfer *prepareOutgoingTransfer(NSURL *originalURL, NSString *fil
 static NSDictionary *handleSendAttachment(NSInteger requestId, NSDictionary *params) {
     NSString *chatGuid = params[@"chatGuid"];
     NSString *filePath = params[@"filePath"];
+    NSString *message = params[@"message"];
+    NSString *effectId = params[@"effectId"];
+    NSString *subject = params[@"subject"];
+    NSString *selectedMessageGuid = params[@"selectedMessageGuid"];
+    NSNumber *partIndexNum = params[@"partIndex"];
+    NSInteger partIndex = partIndexNum ? [partIndexNum integerValue] : 0;
     NSNumber *audioFlag = params[@"isAudioMessage"];
     BOOL isAudio = [audioFlag boolValue];
+    NSArray *textFormatting = params[@"textFormatting"];
 
     if (!chatGuid.length) return errorResponse(requestId, @"Missing chatGuid");
     if (!filePath.length) return errorResponse(requestId, @"Missing filePath");
+    if (!message) message = @"";
     NSError *attrErr = nil;
     NSDictionary *attrs = [[NSFileManager defaultManager]
         attributesOfItemAtPath:filePath error:&attrErr];
@@ -2119,19 +2109,58 @@ static NSDictionary *handleSendAttachment(NSInteger requestId, NSDictionary *par
             return errorResponse(requestId, @"Transfer registered without guid");
         }
 
-        NSAttributedString *body = buildAttachmentAttributed(transferGuid, filename, 0);
-        id imMessage = buildIMMessage(body, nil, nil, nil, nil, 0,
+        NSMutableAttributedString *body = [[NSMutableAttributedString alloc] init];
+        NSInteger attachmentPartIndex = partIndex;
+        if (message.length) {
+            NSString *textPrefix = [message stringByAppendingString:@"\n"];
+            NSAttributedString *textBody = nil;
+            if ([textFormatting isKindOfClass:[NSArray class]] && textFormatting.count > 0) {
+                textBody = buildFormattedAttributed(textPrefix, textFormatting, partIndex);
+            } else {
+                textBody = buildPlainAttributed(textPrefix, partIndex);
+            }
+            [body appendAttributedString:textBody];
+            attachmentPartIndex = partIndex + 1;
+        }
+        [body appendAttributedString:buildAttachmentAttributed(transferGuid, filename,
+                                                               attachmentPartIndex)];
+
+        NSAttributedString *subjectAttr = subject.length
+            ? buildPlainAttributed(subject, 0)
+            : nil;
+        long long associatedType = selectedMessageGuid.length ? 100 : 0;
+        id parentMessage = nil;
+        NSString *threadIdentifier = nil;
+        if (selectedMessageGuid.length) {
+            threadIdentifier = deriveThreadIdentifier(selectedMessageGuid, &parentMessage);
+            debugLog(@"handleSendAttachment: parent=%@ threadId=%@",
+                     selectedMessageGuid, threadIdentifier ?: @"(none)");
+        }
+
+        id imMessage = buildIMMessage(body, subjectAttr, effectId, threadIdentifier,
+                                      selectedMessageGuid, associatedType,
                                       NSMakeRange(0, body.length), nil,
                                       @[transferGuid], isAudio, NO);
         if (!imMessage) {
             return errorResponse(requestId, @"Could not build IMMessage with attachment");
+        }
+        if (parentMessage
+            && [imMessage respondsToSelector:@selector(setThreadOriginator:)]) {
+            [imMessage performSelector:@selector(setThreadOriginator:)
+                            withObject:parentMessage];
+        }
+        if (threadIdentifier
+            && [imMessage respondsToSelector:@selector(setThreadIdentifier:)]) {
+            [imMessage performSelector:@selector(setThreadIdentifier:)
+                            withObject:threadIdentifier];
         }
         dispatchIMMessageInChat(chat, imMessage);
         NSString *guid = lastSentMessageGuid(chat);
         return successResponse(requestId, @{
             @"chatGuid": chatGuid,
             @"messageGuid": guid ?: @"",
-            @"transferGuid": transferGuid
+            @"transferGuid": transferGuid,
+            @"selectedMessageGuid": selectedMessageGuid ?: @""
         });
     } @catch (NSException *exception) {
         return errorResponse(requestId,

@@ -61,6 +61,16 @@ Before invoking AppleScript, `imsg` stages the file under `~/Library/Messages/At
 
 The staged copies live under `imsg/`, distinct from Messages' own subdirectories, and are not pruned automatically. Clear them periodically if disk space matters.
 
+For bridge-backed threaded replies, use `send-rich --file` or
+`send-attachment --reply-to`:
+
+```bash
+imsg send-rich --chat 'iMessage;-;+15551234567' \
+  --reply-to <messageGuid> --text "here it is" --file ~/Desktop/photo.jpg
+imsg send-attachment --chat 'iMessage;-;+15551234567' \
+  --reply-to <messageGuid> --file ~/Desktop/photo.jpg
+```
+
 ## Why not just copy or upload?
 
 The CLI's contract is "read what's there, send what you give it." Anything beyond that — bulk archival, cloud upload, format conversion at rest — is left to callers, who know their retention and privacy requirements. The conversion feature is the one exception, and only because some receive-side formats (CAF, animated GIF) are awkward for downstream tools to handle.

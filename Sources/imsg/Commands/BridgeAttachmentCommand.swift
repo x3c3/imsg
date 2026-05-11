@@ -12,6 +12,7 @@ enum SendAttachmentCommand {
         options: CommandSignatures.baseOptions() + [
           .make(label: "chat", names: [.long("chat")], help: "chat guid"),
           .make(label: "file", names: [.long("file")], help: "absolute path to file"),
+          .make(label: "replyTo", names: [.long("reply-to")], help: "guid of message to reply to"),
           .make(
             label: "transport", names: [.long("transport")],
             help: "transport to use: auto|dylib|applescript"),
@@ -44,21 +45,28 @@ enum SendAttachmentCommand {
     if transport == "applescript" && audio {
       throw ParsedValuesError.invalidOption("audio")
     }
+    let replyTo = values.option("replyTo") ?? ""
+    if transport == "applescript" && !replyTo.isEmpty {
+      throw ParsedValuesError.invalidOption("reply-to")
+    }
 
     if transport != "applescript" {
       let staged = try MessageSender.stageAttachmentForMessagesApp(at: expanded)
-      let params: [String: Any] = [
+      var params: [String: Any] = [
         "chatGuid": chat,
         "filePath": staged,
         "isAudioMessage": audio,
       ]
+      if !replyTo.isEmpty {
+        params["selectedMessageGuid"] = replyTo
+      }
       do {
         let data = try await IMsgBridgeClient.shared.invoke(action: .sendAttachment, params: params)
         let guid = (data["messageGuid"] as? String) ?? ""
         BridgeOutput.emit(data, runtime: runtime, summary: "send-attachment: queued (guid=\(guid))")
         return
       } catch {
-        if transport == "dylib" || audio {
+        if transport == "dylib" || audio || !replyTo.isEmpty {
           BridgeOutput.emitError(String(describing: error), runtime: runtime)
           throw BridgeOutput.EmittedError()
         }

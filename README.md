@@ -122,7 +122,8 @@ Advanced IMCore (require `imsg launch` with SIP off — see
 - `imsg typing --to <handle> [--duration 5s] [--stop true]`
 - `imsg launch [--dylib <path>] [--kill-only] [--json]`
 - `imsg status [--json]`
-- `imsg send-rich`, `imsg send-multipart`, `imsg send-attachment`,
+- `imsg send-rich [--reply-to <guid>] [--file <path>]`,
+  `imsg send-multipart`, `imsg send-attachment [--reply-to <guid>]`,
   `imsg tapback`
 - `imsg edit`, `imsg unsend`, `imsg delete-message`, `imsg notify-anyways`
 - `imsg chat-create`, `imsg chat-name`, `imsg chat-photo`,
@@ -274,6 +275,10 @@ imsg send-rich --chat 'iMessage;-;+15551234567' --text "boom" \
   --effect com.apple.MobileSMS.expressivesend.impact \
   --reply-to <messageGuid>
 
+# Threaded reply with an attachment in one message
+imsg send-rich --chat 'iMessage;-;+15551234567' \
+  --reply-to <messageGuid> --text "here it is" --file ~/Pictures/img.jpg
+
 # Text formatting (macOS 15+ Sequoia): bold/italic/underline/strikethrough
 # applied to specific ranges of the message body.
 imsg send-rich --chat ... --text 'hello world' \
@@ -287,6 +292,7 @@ imsg send-multipart --chat 'iMessage;+;chat0000' \
 
 # Attachment (file or audio)
 imsg send-attachment --chat ... --file ~/Pictures/img.jpg --transport auto
+imsg send-attachment --chat ... --reply-to <messageGuid> --file ~/Pictures/img.jpg
 imsg send-attachment --chat ... --file ~/audio.caf --audio
 
 # Bridge tapback (custom emoji + remove supported here, unlike `imsg react`)

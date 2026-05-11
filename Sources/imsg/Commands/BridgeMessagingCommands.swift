@@ -65,10 +65,14 @@ enum BridgeOutput {
     action: BridgeAction,
     params: [String: Any],
     runtime: RuntimeOptions,
+    invokeBridge: @escaping (BridgeAction, [String: Any]) async throws -> [String: Any] = {
+      action, params in
+      try await IMsgBridgeClient.shared.invoke(action: action, params: params)
+    },
     summary: (([String: Any]) -> String)
   ) async throws -> [String: Any] {
     do {
-      let data = try await IMsgBridgeClient.shared.invoke(action: action, params: params)
+      let data = try await invokeBridge(action, params)
       emit(data, runtime: runtime, summary: summary(data))
       return data
     } catch {
@@ -95,6 +99,7 @@ enum SendRichCommand {
           .make(
             label: "chat", names: [.long("chat")], help: "chat guid (e.g. iMessage;-;+15551234567)"),
           .make(label: "text", names: [.long("text")], help: "message body"),
+          .make(label: "file", names: [.long("file")], help: "path to attachment"),
           .make(
             label: "effect", names: [.long("effect")],
             help: "expressive send id (impact, loud, gentle, invisibleink, confetti, …)"),
@@ -118,6 +123,7 @@ enum SendRichCommand {
     ),
     usageExamples: [
       "imsg send-rich --chat 'iMessage;-;+15551234567' --text 'hi'",
+      "imsg send-rich --chat 'iMessage;-;+15551234567' --reply-to ABCD --file ~/Desktop/pic.jpg",
       "imsg send-rich --chat 'iMessage;-;+15551234567' --text 'BOOM' --effect impact",
       "imsg send-rich --chat 'iMessage;-;+15551234567' --text 'pew pew' --effect lasers",
       "imsg send-rich --chat ... --text 'hello world' --format '[{\"start\":0,\"length\":5,\"styles\":[\"bold\"]}]'",
@@ -126,11 +132,21 @@ enum SendRichCommand {
     try await run(values: values, runtime: runtime)
   }
 
-  static func run(values: ParsedValues, runtime: RuntimeOptions) async throws {
+  static func run(
+    values: ParsedValues,
+    runtime: RuntimeOptions,
+    invokeBridge: @escaping (BridgeAction, [String: Any]) async throws -> [String: Any] = {
+      action, params in
+      try await IMsgBridgeClient.shared.invoke(action: action, params: params)
+    },
+    stageAttachment: @escaping (String) throws -> String = MessageSender
+      .stageAttachmentForMessagesApp
+  ) async throws {
     guard let chat = values.option("chat"), !chat.isEmpty else {
       throw ParsedValuesError.missingOption("chat")
     }
     let text = values.option("text") ?? ""
+    let file = values.option("file") ?? ""
     var params: [String: Any] = [
       "chatGuid": chat,
       "message": text,
@@ -166,8 +182,24 @@ enum SendRichCommand {
       params["textFormatting"] = ranges
     }
 
+    if !file.isEmpty {
+      let expanded = (file as NSString).expandingTildeInPath
+      params["filePath"] = try stageAttachment(expanded)
+      params["isAudioMessage"] = false
+      _ = try await BridgeOutput.invokeAndEmit(
+        action: .sendAttachment,
+        params: params,
+        runtime: runtime,
+        invokeBridge: invokeBridge
+      ) { data in
+        let guid = (data["messageGuid"] as? String) ?? ""
+        return guid.isEmpty ? "send-rich: attachment queued" : "send-rich: sent (guid=\(guid))"
+      }
+      return
+    }
+
     _ = try await BridgeOutput.invokeAndEmit(
-      action: .sendMessage, params: params, runtime: runtime
+      action: .sendMessage, params: params, runtime: runtime, invokeBridge: invokeBridge
     ) { data in
       let guid = (data["messageGuid"] as? String) ?? ""
       return guid.isEmpty ? "send-rich: queued" : "send-rich: sent (guid=\(guid))"
