@@ -84,6 +84,8 @@ struct CommandRouter {
         return 0
       } catch is BridgeOutput.EmittedError {
         return 1
+      } catch is CommandOutputEmittedError {
+        return 1
       } catch {
         StdoutWriter.writeLine(String(describing: error))
         return 1

@@ -109,32 +109,17 @@ final class RPCServer {
   }
 
   private func handleLine(_ line: String) async {
-    guard let data = line.data(using: .utf8) else {
-      output.sendError(id: nil, error: RPCError.parseError("invalid utf8"))
+    let request: RPCRequest
+    switch RPCRequestParser.parse(line) {
+    case .success(let parsed):
+      request = parsed
+    case .failure(let failure):
+      output.sendError(id: failure.id, error: failure.error)
       return
     }
-    let json: Any
-    do {
-      json = try JSONSerialization.jsonObject(with: data, options: [])
-    } catch {
-      output.sendError(id: nil, error: RPCError.parseError(error.localizedDescription))
-      return
-    }
-    guard let request = json as? [String: Any] else {
-      output.sendError(id: nil, error: RPCError.invalidRequest("request must be an object"))
-      return
-    }
-    let jsonrpc = request["jsonrpc"] as? String
-    if jsonrpc != nil && jsonrpc != "2.0" {
-      output.sendError(id: request["id"], error: RPCError.invalidRequest("jsonrpc must be 2.0"))
-      return
-    }
-    guard let method = request["method"] as? String, !method.isEmpty else {
-      output.sendError(id: request["id"], error: RPCError.invalidRequest("method is required"))
-      return
-    }
-    let params = request["params"] as? [String: Any] ?? [:]
-    let id = request["id"]
+    let method = request.method
+    let params = request.params
+    let id = request.id
 
     do {
       switch method {

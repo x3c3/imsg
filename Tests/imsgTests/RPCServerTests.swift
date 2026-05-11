@@ -297,6 +297,30 @@ func rpcRejectsInvalidJSON() async throws {
 }
 
 @Test
+func rpcStartupErrorServerPreservesJSONRPCFraming() async throws {
+  let output = TestRPCOutput()
+  let error = IMsgError.permissionDenied(
+    path: "/tmp/chat.db",
+    underlying: NSError(domain: "SQLite", code: 14)
+  )
+  let server = RPCStartupErrorServer(error: error, output: output)
+
+  await server.handleLineForTesting(
+    #"{"jsonrpc":"2.0","id":"startup","method":"chats.list","params":{"limit":1}}"#
+  )
+
+  #expect(output.errors.count == 1)
+  let envelope = output.errors[0]
+  #expect(envelope["id"] as? String == "startup")
+  let payload = envelope["error"] as? [String: Any]
+  #expect(int64Value(payload?["code"]) == -32603)
+  #expect(payload?["message"] as? String == "Internal error")
+  let data = payload?["data"] as? String ?? ""
+  #expect(data.contains("Permission Error"))
+  #expect(data.contains("Full Disk Access"))
+}
+
+@Test
 func rpcRejectsNonObjectRequest() async throws {
   let store = try CommandTestDatabase.makeStoreForRPC()
   let output = TestRPCOutput()

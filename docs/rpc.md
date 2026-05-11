@@ -11,6 +11,8 @@ description: "Long-running JSON-RPC 2.0 over stdio for chats, history, watch, an
 - JSON-RPC 2.0 framing: `jsonrpc`, `id`, `method`, `params`.
 - Notifications omit `id`.
 - Stderr is reserved for human-readable diagnostics.
+- Startup failures such as missing Full Disk Access are returned as JSON-RPC
+  errors on the first request instead of human-readable stdout banners.
 
 ## Lifecycle
 
