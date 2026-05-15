@@ -113,6 +113,70 @@ func messagePayloadIncludesChatFields() throws {
 }
 
 @Test
+func messagePayloadExposesReplyParentSnakeCaseKeys() throws {
+  let message = Message(
+    rowID: 11,
+    chatID: 10,
+    sender: "+456",
+    text: "Calendar",
+    date: Date(timeIntervalSince1970: 3),
+    isFromMe: false,
+    service: "iMessage",
+    handleID: 2,
+    attachmentsCount: 0,
+    guid: "reply-guid",
+    threadOriginatorGUID: "parent-guid",
+    replyToText: "Should I lead with calendar, family, or email?",
+    replyToSender: "+123"
+  )
+  let payload = try messagePayload(
+    message: message,
+    chatInfo: nil,
+    participants: [],
+    attachments: [],
+    reactions: []
+  )
+
+  #expect(
+    payload["reply_to_text"] as? String == "Should I lead with calendar, family, or email?"
+  )
+  #expect(payload["reply_to_sender"] as? String == "+123")
+  #expect(payload["thread_originator_guid"] as? String == "parent-guid")
+}
+
+@Test
+func messagePayloadOmitsReplyParentWhenAbsent() throws {
+  let message = Message(
+    rowID: 12,
+    chatID: 10,
+    sender: "+456",
+    text: "standalone",
+    date: Date(timeIntervalSince1970: 3),
+    isFromMe: false,
+    service: "iMessage",
+    handleID: 2,
+    attachmentsCount: 0,
+    guid: "msg-guid-12"
+  )
+  let payload = try messagePayload(
+    message: message,
+    chatInfo: nil,
+    participants: [],
+    attachments: [],
+    reactions: []
+  )
+
+  // JSONSerialization preserves Codable `nil` as a missing key (the bridging
+  // omits NSNull entries from `Encodable?` properties). Treat both
+  // "missing key" and "NSNull" as absent so the assertion stays robust to
+  // SQLite.swift / Foundation behaviour changes.
+  let replyText = payload["reply_to_text"]
+  let replySender = payload["reply_to_sender"]
+  #expect(replyText == nil || replyText is NSNull)
+  #expect(replySender == nil || replySender is NSNull)
+}
+
+@Test
 func messagePayloadIncludesSenderAndReactionNames() throws {
   let message = Message(
     rowID: 7,

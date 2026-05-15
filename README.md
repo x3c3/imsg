@@ -152,6 +152,9 @@ Message objects include:
 - `id`, `chat_id`, `chat_identifier`, `chat_guid`, `chat_name`
 - `participants`, `is_group`
 - `guid`, `reply_to_guid`, `thread_originator_guid`, `destination_caller_id`
+- `reply_to_text`, `reply_to_sender` (parent body + handle for threaded
+  replies and non-reaction associations, when the parent row is still in
+  chat.db)
 - `sender`, `sender_name`, `is_from_me`, `text`, `created_at`
 - `attachments`, `reactions`
 

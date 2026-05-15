@@ -59,6 +59,12 @@ struct MessagePayload: Codable {
   let guid: String
   let replyToGUID: String?
   let threadOriginatorGUID: String?
+  /// Text of the message this one replies to, when the inbound message is a
+  /// Threader reply or a non-reaction association and the parent row is
+  /// resolvable in chat.db.
+  let replyToText: String?
+  /// Sender handle of the parent message resolved alongside `replyToText`.
+  let replyToSender: String?
   let sender: String
   let senderName: String?
   let isFromMe: Bool
@@ -90,6 +96,8 @@ struct MessagePayload: Codable {
     self.guid = message.guid
     self.replyToGUID = message.replyToGUID
     self.threadOriginatorGUID = message.threadOriginatorGUID
+    self.replyToText = message.replyToText
+    self.replyToSender = message.replyToSender
     self.sender = message.sender
     self.senderName = senderName
     self.isFromMe = message.isFromMe
@@ -123,6 +131,8 @@ struct MessagePayload: Codable {
     case guid
     case replyToGUID = "reply_to_guid"
     case threadOriginatorGUID = "thread_originator_guid"
+    case replyToText = "reply_to_text"
+    case replyToSender = "reply_to_sender"
     case sender
     case senderName = "sender_name"
     case isFromMe = "is_from_me"

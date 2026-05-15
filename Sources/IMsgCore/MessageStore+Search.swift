@@ -56,6 +56,7 @@ extension MessageStore {
 
     return try withConnection { db in
       var messages: [Message] = []
+      var parentCache: ReplyParentCache = [:]
       let rows = try db.prepareRowIterator(query.sql, bindings: query.bindings)
       while let row = try rows.failableNext() {
         let decoded = try decodeMessageRow(
@@ -66,6 +67,14 @@ extension MessageStore {
         let replyToGUID = replyToGUID(
           associatedGuid: decoded.associatedGUID,
           associatedType: decoded.associatedType
+        )
+        let threadOriginatorGUID =
+          decoded.threadOriginatorGUID.isEmpty ? nil : decoded.threadOriginatorGUID
+        let parent = enrichedReplyContext(
+          db,
+          replyToGUID: replyToGUID,
+          threadOriginatorGUID: threadOriginatorGUID,
+          cache: &parentCache
         )
         messages.append(
           Message(
@@ -81,10 +90,11 @@ extension MessageStore {
             guid: decoded.guid,
             routing: Message.RoutingMetadata(
               replyToGUID: replyToGUID,
-              threadOriginatorGUID: decoded.threadOriginatorGUID.isEmpty
-                ? nil : decoded.threadOriginatorGUID,
+              threadOriginatorGUID: threadOriginatorGUID,
               destinationCallerID: decoded.destinationCallerID.isEmpty
-                ? nil : decoded.destinationCallerID
+                ? nil : decoded.destinationCallerID,
+              replyToText: parent?.text,
+              replyToSender: parent?.sender
             )
           ))
       }

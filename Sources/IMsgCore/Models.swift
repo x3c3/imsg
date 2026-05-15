@@ -251,15 +251,21 @@ public struct Message: Sendable, Equatable {
     public let replyToGUID: String?
     public let threadOriginatorGUID: String?
     public let destinationCallerID: String?
+    public let replyToText: String?
+    public let replyToSender: String?
 
     public init(
       replyToGUID: String? = nil,
       threadOriginatorGUID: String? = nil,
-      destinationCallerID: String? = nil
+      destinationCallerID: String? = nil,
+      replyToText: String? = nil,
+      replyToSender: String? = nil
     ) {
       self.replyToGUID = replyToGUID
       self.threadOriginatorGUID = threadOriginatorGUID
       self.destinationCallerID = destinationCallerID
+      self.replyToText = replyToText
+      self.replyToSender = replyToSender
     }
   }
 
@@ -287,6 +293,13 @@ public struct Message: Sendable, Equatable {
   public let guid: String
   public let replyToGUID: String?
   public let threadOriginatorGUID: String?
+  /// Text of the message this one replies to (Threader reply or non-reaction
+  /// association). Resolved by joining `replyToGUID` or `threadOriginatorGUID`
+  /// back to the parent row; nil when no parent exists or it is no longer
+  /// in chat.db.
+  public let replyToText: String?
+  /// Sender handle (`h.id`) of the message this one replies to.
+  public let replyToSender: String?
   public let sender: String
   public let text: String
   public let date: Date
@@ -328,6 +341,8 @@ public struct Message: Sendable, Equatable {
     self.guid = guid
     self.replyToGUID = routing.replyToGUID
     self.threadOriginatorGUID = routing.threadOriginatorGUID
+    self.replyToText = routing.replyToText
+    self.replyToSender = routing.replyToSender
     self.sender = sender
     self.text = text
     self.date = date
@@ -356,6 +371,8 @@ public struct Message: Sendable, Equatable {
     replyToGUID: String? = nil,
     threadOriginatorGUID: String? = nil,
     destinationCallerID: String? = nil,
+    replyToText: String? = nil,
+    replyToSender: String? = nil,
     isReaction: Bool = false,
     reactionType: ReactionType? = nil,
     isReactionAdd: Bool? = nil,
@@ -375,7 +392,9 @@ public struct Message: Sendable, Equatable {
       routing: RoutingMetadata(
         replyToGUID: replyToGUID,
         threadOriginatorGUID: threadOriginatorGUID,
-        destinationCallerID: destinationCallerID
+        destinationCallerID: destinationCallerID,
+        replyToText: replyToText,
+        replyToSender: replyToSender
       ),
       reaction: ReactionMetadata(
         isReaction: isReaction,

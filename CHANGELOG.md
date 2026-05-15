@@ -2,6 +2,14 @@
 
 ## 0.8.3 - Unreleased
 
+### JSON Output
+- feat: include `reply_to_text` and `reply_to_sender` on message payloads
+  emitted by `history`, `search`, `watch`, and `rpc` so consumers can quote
+  the parent of a threaded reply (or non-reaction association) without a
+  follow-up chat.db lookup. The parent is resolved by joining
+  `thread_originator_guid` or the non-reaction `associated_message_guid`
+  back to the message table; absent parents leave the fields nil.
+
 ### Private API Bridge
 - fix: support threaded attachment replies via `send-rich --file` and
   `send-attachment --reply-to`, including the macOS 26 attachment staging
