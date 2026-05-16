@@ -218,23 +218,27 @@ extension MessageStore {
           continue
         }
 
-        let replyToGUID = replyToGUID(
-          associatedGuid: decoded.associatedGUID,
-          associatedType: decoded.associatedType
-        )
-        let threadOriginatorGUID =
-          decoded.threadOriginatorGUID.isEmpty ? nil : decoded.threadOriginatorGUID
-        let parent = enrichedReplyContext(
-          db,
-          replyToGUID: replyToGUID,
-          threadOriginatorGUID: threadOriginatorGUID,
-          cache: &parentCache
-        )
         let reaction = decodeReaction(
           associatedType: decoded.associatedType,
           associatedGUID: decoded.associatedGUID,
           text: decoded.text
         )
+        let replyToGUID = replyToGUID(
+          associatedGuid: decoded.associatedGUID,
+          associatedType: decoded.associatedType
+        )
+        let threadOriginatorGUID =
+          reaction.isReaction || decoded.threadOriginatorGUID.isEmpty
+          ? nil : decoded.threadOriginatorGUID
+        let parent =
+          reaction.isReaction
+          ? nil
+          : enrichedReplyContext(
+            db,
+            replyToGUID: replyToGUID,
+            threadOriginatorGUID: threadOriginatorGUID,
+            cache: &parentCache
+          )
 
         messages.append(
           Message(

@@ -209,7 +209,8 @@ func reactionsDoNotProduceReplyContext() throws {
     guid: "reaction-guid",
     date: now,
     associatedGuid: "p:0/parent-guid",
-    associatedType: 2000
+    associatedType: 2000,
+    threadOriginatorGuid: "parent-guid"
   )
 
   let store = try MessageStore(connection: db, path: ":memory:")
@@ -219,6 +220,7 @@ func reactionsDoNotProduceReplyContext() throws {
 
   #expect(reaction.isReaction)
   #expect(reaction.replyToGUID == nil)
+  #expect(reaction.threadOriginatorGUID == nil)
   #expect(reaction.replyToText == nil)
   #expect(reaction.replyToSender == nil)
 }
