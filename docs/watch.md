@@ -58,6 +58,21 @@ imsg watch --chat-id 42 --attachments --convert-attachments --json
 
 Attachment metadata is reported the same way as [`history`](history.md). `--convert-attachments` requires `ffmpeg` on `PATH`; see [Attachments](attachments.md).
 
+## Native polls
+
+Native Apple Messages poll creation and vote updates are emitted without a separate flag. Poll vote rows are not tapbacks, so they do not require `--reactions`.
+
+```bash
+imsg watch --chat-id 42 --json \
+  | jq -c 'select(.poll != null) | {id, guid, poll}'
+```
+
+Poll rows carry `poll.event` values suitable for routing:
+
+- `imessage.poll.created`
+- `imessage.poll.voted`
+- `imessage.poll.unknown`
+
 ## Debounce
 
 ```bash
@@ -97,6 +112,6 @@ When you send a link, Messages writes a "balloon" placeholder row first, then la
 
 ## Output schema
 
-Each line is a complete JSON object. See [JSON output → Message](json.md#message) for the full field list. For tapback events also see the reaction fields above.
+Each line is a complete JSON object. See [JSON output → Message](json.md#message) for the full field list. For tapback events also see the reaction fields above. For native polls, see [JSON output → Native poll extension](json.md#native-poll-extension).
 
 Lines are flushed immediately when stdout is buffered (e.g. piped through `jq -c`), so downstream consumers don't experience batching artifacts.

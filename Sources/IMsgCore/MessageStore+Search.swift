@@ -95,7 +95,8 @@ extension MessageStore {
                 ? nil : decoded.destinationCallerID,
               replyToText: parent?.text,
               replyToSender: parent?.sender
-            )
+            ),
+            poll: decoded.poll
           ))
       }
       return messages

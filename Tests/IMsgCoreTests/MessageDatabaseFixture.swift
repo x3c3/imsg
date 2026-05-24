@@ -10,6 +10,8 @@ enum MessageDatabaseFixture {
     var includeDestinationCallerID = false
     var includeAudioMessage = false
     var includeBalloonBundleID = false
+    var includePayloadData = false
+    var includeMessageSummaryInfo = false
     var includeAttachmentUserInfo = false
     var includeChatMessageDate = false
     var includeChatRouting = true
@@ -28,6 +30,8 @@ enum MessageDatabaseFixture {
       options.includeDestinationCallerID ? "destination_caller_id TEXT," : ""
     let audioMessageColumn = options.includeAudioMessage ? "is_audio_message INTEGER," : ""
     let balloonColumn = options.includeBalloonBundleID ? "balloon_bundle_id TEXT," : ""
+    let payloadDataColumn = options.includePayloadData ? "payload_data BLOB," : ""
+    let summaryInfoColumn = options.includeMessageSummaryInfo ? "message_summary_info BLOB," : ""
 
     try db.execute(
       """
@@ -41,6 +45,8 @@ enum MessageDatabaseFixture {
         \(destinationCallerColumn)
         \(audioMessageColumn)
         \(balloonColumn)
+        \(payloadDataColumn)
+        \(summaryInfoColumn)
         date INTEGER,
         is_from_me INTEGER,
         service TEXT

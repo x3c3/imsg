@@ -113,6 +113,47 @@ func messagePayloadIncludesChatFields() throws {
 }
 
 @Test
+func messagePayloadIncludesPollObject() throws {
+  let poll = MessagePollEvent(
+    kind: .created,
+    pollGUID: "poll-guid",
+    question: "Choose?",
+    options: [
+      MessagePollOption(id: "choice-a", text: "A"),
+      MessagePollOption(id: "choice-b", text: "B"),
+    ]
+  )
+  let message = Message(
+    rowID: 12,
+    chatID: 10,
+    sender: "+123",
+    text: "",
+    date: Date(timeIntervalSince1970: 3),
+    isFromMe: false,
+    service: "iMessage",
+    handleID: 1,
+    attachmentsCount: 0,
+    guid: "poll-row-guid",
+    poll: poll
+  )
+
+  let payload = try messagePayload(
+    message: message,
+    chatInfo: nil,
+    participants: [],
+    attachments: [],
+    reactions: []
+  )
+
+  let pollPayload = try #require(payload["poll"] as? [String: Any])
+  #expect(pollPayload["kind"] as? String == "created")
+  #expect(pollPayload["event"] as? String == "imessage.poll.created")
+  #expect(pollPayload["poll_guid"] as? String == "poll-guid")
+  #expect(pollPayload["question"] as? String == "Choose?")
+  #expect((pollPayload["options"] as? [[String: Any]])?.count == 2)
+}
+
+@Test
 func messagePayloadExposesReplyParentSnakeCaseKeys() throws {
   let message = Message(
     rowID: 11,

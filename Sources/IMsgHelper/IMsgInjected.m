@@ -206,6 +206,8 @@ static BOOL gHasEditMessage = NO;            // editMessage:atPartIndex:withNewP
 static BOOL gHasRetractMessagePart = NO;     // retractMessagePart:
 static BOOL gHasSendMessageReason = NO;      // sendMessage:reason:
 
+static BOOL pollPayloadMessageInitializerAvailable(void);
+
 static void probeSelectors(void) {
     Class chatClass = NSClassFromString(@"IMChat");
     if (!chatClass) return;
@@ -802,7 +804,8 @@ static NSDictionary* handleStatus(NSInteger requestId, NSDictionary *params) {
         @"editMessageItem": @(gHasEditMessageItem),
         @"editMessage": @(gHasEditMessage),
         @"retractMessagePart": @(gHasRetractMessagePart),
-        @"sendMessageReason": @(gHasSendMessageReason)
+        @"sendMessageReason": @(gHasSendMessageReason),
+        @"pollPayloadMessage": @(pollPayloadMessageInitializerAvailable())
     };
 
     return successResponse(requestId, @{
@@ -1369,6 +1372,200 @@ static void dispatchIMMessageInChat(IMChat *chat, id message) {
 
 static unsigned long long flagsForMessagePayload(NSAttributedString *subject,
                                                  NSArray *fileTransferGuids,
+                                                 BOOL isAudioMessage);
+
+static NSString *pollsBalloonBundleIdentifier(void) {
+    return @"com.apple.messages.MSMessageExtensionBalloonPlugin:0000000000:com.apple.messages.Polls";
+}
+
+static BOOL pollPayloadMessageInitializerAvailable(void) {
+    Class messageClass = NSClassFromString(@"IMMessage");
+    SEL sel = @selector(initWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:balloonBundleID:payloadData:expressiveSendStyleID:threadIdentifier:scheduleType:scheduleState:messageSummaryInfo:);
+    return messageClass && [messageClass instancesRespondToSelector:sel];
+}
+
+static NSString *trimmedPollString(id value) {
+    if (![value isKindOfClass:[NSString class]]) return nil;
+    NSString *trimmed = [(NSString *)value stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return trimmed.length ? trimmed : nil;
+}
+
+static NSString *activeIMessageSenderHandle(void) {
+    Class accClass = NSClassFromString(@"IMAccountController");
+    id ctrl = accClass ? [accClass performSelector:@selector(sharedInstance)] : nil;
+    id account = nil;
+    if (ctrl && [ctrl respondsToSelector:@selector(activeIMessageAccount)]) {
+        account = [ctrl performSelector:@selector(activeIMessageAccount)];
+    }
+    if (!account) return nil;
+
+    id login = nil;
+    if ([account respondsToSelector:@selector(loginIMHandle)]) {
+        login = [account performSelector:@selector(loginIMHandle)];
+    }
+    if (login && [login respondsToSelector:@selector(ID)]) {
+        NSString *loginID = [login performSelector:@selector(ID)];
+        if (loginID.length) return loginID;
+    }
+
+    if ([account respondsToSelector:@selector(vettedAliases)]) {
+        NSArray *aliases = [account performSelector:@selector(vettedAliases)];
+        for (id alias in aliases) {
+            NSString *candidate = trimmedPollString(alias);
+            if (candidate.length) return candidate;
+        }
+    }
+    return nil;
+}
+
+static NSArray<NSString *> *normalizedPollOptions(NSArray *rawOptions) {
+    NSMutableArray<NSString *> *options = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (id raw in rawOptions) {
+        NSString *text = trimmedPollString(raw);
+        if (!text.length) continue;
+        if ([seen containsObject:text]) continue;
+        [options addObject:text];
+        [seen addObject:text];
+    }
+    return options;
+}
+
+static NSData *archivePollPayloadEnvelope(NSURL *url,
+                                          NSUUID *sessionIdentifier,
+                                          NSError **outError) {
+    NSDictionary *envelope = @{
+        @"URL": url,
+        @"sessionIdentifier": sessionIdentifier,
+        @"an": @"Polls"
+    };
+    if (@available(macOS 10.13, *)) {
+        return [NSKeyedArchiver archivedDataWithRootObject:envelope
+                                     requiringSecureCoding:NO
+                                                     error:outError];
+    }
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [NSKeyedArchiver archivedDataWithRootObject:envelope];
+    #pragma clang diagnostic pop
+}
+
+static NSData *buildPollCreationPayloadData(NSString *question,
+                                            NSArray<NSString *> *options,
+                                            NSString *creatorHandle,
+                                            NSString **outSessionIdentifier,
+                                            NSArray<NSString *> **outOptionIdentifiers,
+                                            NSString **outError) {
+    NSMutableArray<NSDictionary *> *pollOptions = [NSMutableArray array];
+    NSMutableArray<NSString *> *optionIdentifiers = [NSMutableArray array];
+    for (NSString *optionText in options) {
+        NSString *identifier = [[NSUUID UUID] UUIDString];
+        [optionIdentifiers addObject:identifier];
+        NSMutableDictionary *option = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"canBeEdited": @NO,
+            @"attributedText": optionText,
+            @"text": optionText,
+            @"optionIdentifier": identifier
+        }];
+        if (creatorHandle.length) {
+            option[@"creatorHandle"] = creatorHandle;
+        }
+        [pollOptions addObject:option];
+    }
+
+    NSMutableDictionary *item = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"title": question ?: @"",
+        @"orderedPollOptions": pollOptions
+    }];
+    if (creatorHandle.length) {
+        item[@"creatorHandle"] = creatorHandle;
+    }
+    NSDictionary *root = @{@"item": item, @"version": @1};
+
+    NSError *jsonError = nil;
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:root options:0 error:&jsonError];
+    if (!jsonData) {
+        if (outError) *outError = jsonError.localizedDescription ?: @"Could not encode poll payload";
+        return nil;
+    }
+    if (jsonData.length > 4096) {
+        if (outError) *outError = @"Poll definition payload exceeds 4096 bytes";
+        return nil;
+    }
+
+    NSString *encoded = [jsonData base64EncodedStringWithOptions:0];
+    NSString *urlString = [NSString stringWithFormat:@"data:,%@?src=p&c=%lu",
+                                                     encoded,
+                                                     (unsigned long)options.count];
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) {
+        if (outError) *outError = @"Could not create poll URL";
+        return nil;
+    }
+
+    NSUUID *sessionIdentifier = [NSUUID UUID];
+    NSError *archiveError = nil;
+    NSData *payload = archivePollPayloadEnvelope(url, sessionIdentifier, &archiveError);
+    if (!payload) {
+        if (outError) *outError = archiveError.localizedDescription ?: @"Could not archive poll payload";
+        return nil;
+    }
+
+    if (outSessionIdentifier) {
+        *outSessionIdentifier = sessionIdentifier.UUIDString;
+    }
+    if (outOptionIdentifiers) {
+        *outOptionIdentifiers = optionIdentifiers;
+    }
+    return payload;
+}
+
+static id buildPollIMMessage(NSAttributedString *body,
+                             NSData *payloadData,
+                             NSDictionary *summaryInfo) {
+    Class messageClass = NSClassFromString(@"IMMessage");
+    if (!messageClass) return nil;
+
+    SEL sel = @selector(initWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:balloonBundleID:payloadData:expressiveSendStyleID:threadIdentifier:scheduleType:scheduleState:messageSummaryInfo:);
+    if (![messageClass instancesRespondToSelector:sel]) return nil;
+
+    id msg = [[messageClass alloc] init];
+    NSMethodSignature *sig = [messageClass instanceMethodSignatureForSelector:sel];
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+    [inv setSelector:sel];
+    [inv setTarget:msg];
+
+    id nilObj = nil;
+    NSDate *now = [NSDate date];
+    NSArray *fileTransferGuids = @[];
+    unsigned long long flags = flagsForMessagePayload(nil, fileTransferGuids, NO);
+    NSString *balloonID = pollsBalloonBundleIdentifier();
+    unsigned long long scheduleType = 0;
+    unsigned long long scheduleState = 0;
+
+    [inv setArgument:&nilObj atIndex:2];              // sender
+    [inv setArgument:&now atIndex:3];                 // time
+    [inv setArgument:&body atIndex:4];                // text
+    [inv setArgument:&nilObj atIndex:5];              // messageSubject
+    [inv setArgument:&fileTransferGuids atIndex:6];
+    [inv setArgument:&flags atIndex:7];
+    [inv setArgument:&nilObj atIndex:8];              // error
+    [inv setArgument:&nilObj atIndex:9];              // guid
+    [inv setArgument:&nilObj atIndex:10];             // subject string
+    [inv setArgument:&balloonID atIndex:11];
+    [inv setArgument:&payloadData atIndex:12];
+    [inv setArgument:&nilObj atIndex:13];             // expressiveSendStyleID
+    [inv setArgument:&nilObj atIndex:14];             // threadIdentifier
+    [inv setArgument:&scheduleType atIndex:15];
+    [inv setArgument:&scheduleState atIndex:16];
+    [inv setArgument:&summaryInfo atIndex:17];
+    [inv retainArguments];
+    return invokeReturningObject(inv);
+}
+
+static unsigned long long flagsForMessagePayload(NSAttributedString *subject,
+                                                 NSArray *fileTransferGuids,
                                                  BOOL isAudioMessage) {
     if (isAudioMessage) {
         return 0x300005ULL;
@@ -1867,6 +2064,93 @@ static NSDictionary *handleSendMessage(NSInteger requestId, NSDictionary *params
     } @catch (NSException *exception) {
         return errorResponse(requestId,
             [NSString stringWithFormat:@"send-message failed: %@", exception.reason]);
+    }
+}
+
+/// `send-poll`: construct a native Messages Polls extension balloon and send
+/// it via IMCore. Payload shape mirrors Apple's Polls extension envelope:
+/// archived { URL, sessionIdentifier, an }, where URL is a data URL carrying
+/// the JSON poll definition.
+static NSDictionary *handleSendPoll(NSInteger requestId, NSDictionary *params) {
+    NSString *chatGuid = params[@"chatGuid"];
+    NSString *question = trimmedPollString(params[@"question"]);
+    NSArray *rawOptions = params[@"options"];
+    NSString *creatorHandle = trimmedPollString(params[@"creatorHandle"]);
+
+    if (!chatGuid.length) return errorResponse(requestId, @"Missing chatGuid");
+    if (!question.length) return errorResponse(requestId, @"Missing question");
+    if (![rawOptions isKindOfClass:[NSArray class]]) {
+        return errorResponse(requestId, @"Missing options array");
+    }
+
+    NSArray<NSString *> *options = normalizedPollOptions(rawOptions);
+    if (options.count < 2) {
+        return errorResponse(requestId, @"Poll requires at least two options");
+    }
+    if (!pollPayloadMessageInitializerAvailable()) {
+        return errorResponse(requestId, @"Poll IMMessage initializer unavailable on this macOS");
+    }
+
+    IMChat *chat = resolveChatByGuid(chatGuid);
+    if (!chat) {
+        return errorResponse(requestId,
+            [NSString stringWithFormat:@"Chat not found: %@", chatGuid]);
+    }
+
+    if (!creatorHandle.length) {
+        creatorHandle = activeIMessageSenderHandle();
+    }
+    if (!creatorHandle.length) {
+        return errorResponse(requestId,
+            @"Could not resolve active iMessage sender handle for poll payload");
+    }
+
+    NSString *sessionIdentifier = nil;
+    NSArray<NSString *> *optionIdentifiers = nil;
+    NSString *payloadError = nil;
+    NSData *payloadData = buildPollCreationPayloadData(question,
+                                                       options,
+                                                       creatorHandle,
+                                                       &sessionIdentifier,
+                                                       &optionIdentifiers,
+                                                       &payloadError);
+    if (!payloadData) {
+        return errorResponse(requestId, payloadError ?: @"Could not build poll payload");
+    }
+
+    NSDictionary *summary = @{ @"amc": @0, @"ust": @YES };
+    NSString *pollPlaceholder = [NSString stringWithFormat:@"%C", (unichar)0xFFFD];
+    NSAttributedString *body = buildPlainAttributed(pollPlaceholder, 0);
+
+    @try {
+        id imMessage = buildPollIMMessage(body, payloadData, summary);
+        if (!imMessage) {
+            return errorResponse(requestId, @"Could not construct poll IMMessage");
+        }
+        dispatchIMMessageInChat(chat, imMessage);
+        NSString *guid = lastSentMessageGuid(chat);
+
+        NSMutableArray *optionPayloads = [NSMutableArray array];
+        for (NSUInteger i = 0; i < options.count; i++) {
+            NSString *identifier = optionIdentifiers.count > i ? optionIdentifiers[i] : @"";
+            [optionPayloads addObject:@{@"id": identifier, @"text": options[i]}];
+        }
+
+        return successResponse(requestId, @{
+            @"chatGuid": chatGuid,
+            @"messageGuid": guid ?: @"",
+            @"poll": @{
+                @"kind": @"created",
+                @"event": @"imessage.poll.created",
+                @"question": question,
+                @"options": optionPayloads,
+                @"sessionIdentifier": sessionIdentifier ?: @""
+            },
+            @"balloonBundleID": pollsBalloonBundleIdentifier()
+        });
+    } @catch (NSException *exception) {
+        return errorResponse(requestId,
+            [NSString stringWithFormat:@"send-poll failed: %@", exception.reason]);
     }
 }
 
@@ -3154,6 +3438,7 @@ static NSDictionary* dispatchAction(NSInteger legacyId, NSString *action,
     if ([action isEqualToString:@"send-message"]) return handleSendMessage(legacyId, params);
     if ([action isEqualToString:@"send-multipart"]) return handleSendMultipart(legacyId, params);
     if ([action isEqualToString:@"send-attachment"]) return handleSendAttachment(legacyId, params);
+    if ([action isEqualToString:@"send-poll"]) return handleSendPoll(legacyId, params);
     if ([action isEqualToString:@"send-reaction"]) return handleSendReaction(legacyId, params);
     if ([action isEqualToString:@"notify-anyways"]) return handleNotifyAnyways(legacyId, params);
     if ([action isEqualToString:@"edit-message"]) return handleEditMessage(legacyId, params);

@@ -8,6 +8,8 @@ struct MessageStoreSchema: Sendable {
   let hasAudioMessageColumn: Bool
   let hasAttachmentUserInfo: Bool
   let hasBalloonBundleIDColumn: Bool
+  let hasPayloadDataColumn: Bool
+  let hasMessageSummaryInfoColumn: Bool
   let hasChatMessageJoinMessageDateColumn: Bool
   let hasChatAccountIDColumn: Bool
   let hasChatAccountLoginColumn: Bool
@@ -29,6 +31,8 @@ struct MessageStoreSchema: Sendable {
     self.hasAudioMessageColumn = messageColumns.contains("is_audio_message")
     self.hasAttachmentUserInfo = attachmentColumns.contains("user_info")
     self.hasBalloonBundleIDColumn = messageColumns.contains("balloon_bundle_id")
+    self.hasPayloadDataColumn = messageColumns.contains("payload_data")
+    self.hasMessageSummaryInfoColumn = messageColumns.contains("message_summary_info")
     self.hasChatMessageJoinMessageDateColumn = chatMessageJoinColumns.contains("message_date")
     self.hasChatAccountIDColumn = chatColumns.contains("account_id")
     self.hasChatAccountLoginColumn = chatColumns.contains("account_login")
@@ -44,6 +48,8 @@ struct MessageStoreSchema: Sendable {
     hasAudioMessageColumn: Bool? = nil,
     hasAttachmentUserInfo: Bool? = nil,
     hasBalloonBundleIDColumn: Bool? = nil,
+    hasPayloadDataColumn: Bool? = nil,
+    hasMessageSummaryInfoColumn: Bool? = nil,
     hasChatMessageJoinMessageDateColumn: Bool? = nil,
     hasChatAccountIDColumn: Bool? = nil,
     hasChatAccountLoginColumn: Bool? = nil,
@@ -57,6 +63,9 @@ struct MessageStoreSchema: Sendable {
     self.hasAudioMessageColumn = hasAudioMessageColumn ?? base.hasAudioMessageColumn
     self.hasAttachmentUserInfo = hasAttachmentUserInfo ?? base.hasAttachmentUserInfo
     self.hasBalloonBundleIDColumn = hasBalloonBundleIDColumn ?? base.hasBalloonBundleIDColumn
+    self.hasPayloadDataColumn = hasPayloadDataColumn ?? base.hasPayloadDataColumn
+    self.hasMessageSummaryInfoColumn =
+      hasMessageSummaryInfoColumn ?? base.hasMessageSummaryInfoColumn
     self.hasChatMessageJoinMessageDateColumn =
       hasChatMessageJoinMessageDateColumn ?? base.hasChatMessageJoinMessageDateColumn
     self.hasChatAccountIDColumn = hasChatAccountIDColumn ?? base.hasChatAccountIDColumn

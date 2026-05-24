@@ -67,6 +67,38 @@ extension RPCServer {
     respond(id: id, result: result)
   }
 
+  func handlePollSend(params: [String: Any], id: Any?) async throws {
+    let chatGUID = try await resolveChatGUIDParam(params)
+    guard let question = stringParam(params["question"]), !question.isEmpty else {
+      throw RPCError.invalidParams("question is required")
+    }
+    let options = try rpcPollOptionsParam(params)
+    var bridgeParams: [String: Any] = [
+      "chatGuid": chatGUID,
+      "question": question,
+      "options": options,
+    ]
+    if let creatorHandle = stringParam(params["creator_handle"] ?? params["creatorHandle"]),
+      !creatorHandle.isEmpty
+    {
+      bridgeParams["creatorHandle"] = creatorHandle
+    }
+
+    let data = try await invokeBridge(action: .sendPoll, params: bridgeParams)
+    var result: [String: Any] = [
+      "ok": true,
+      "event": "imessage.poll.created",
+    ]
+    if let guid = data["messageGuid"] as? String, !guid.isEmpty {
+      result["guid"] = guid
+      result["message_id"] = guid
+    }
+    if let poll = data["poll"] as? [String: Any] {
+      result["poll"] = poll
+    }
+    respond(id: id, result: result)
+  }
+
   func handleTapback(params: [String: Any], id: Any?) async throws {
     let chatGUID = try await resolveChatGUIDParam(params)
     guard let messageGUID = rpcMessageGUIDParam(params) else {
@@ -153,6 +185,28 @@ extension RPCServer {
     _ = try await invokeBridge(action: action, params: bridgeParams)
     respond(id: id, result: ["ok": true])
   }
+}
+
+func rpcPollOptionsParam(_ params: [String: Any]) throws -> [String] {
+  let raw = params["options"] ?? params["option"]
+  let values: [Any]
+  if let array = raw as? [Any] {
+    values = array
+  } else if let string = raw as? String {
+    values = [string]
+  } else {
+    throw RPCError.invalidParams("options is required")
+  }
+
+  let options = values.compactMap { value -> String? in
+    guard let string = stringParam(value) else { return nil }
+    let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+  if options.count < 2 {
+    throw RPCError.invalidParams("at least two poll options are required")
+  }
+  return options
 }
 
 func rpcMessageGUIDParam(_ params: [String: Any]) -> String? {

@@ -311,6 +311,9 @@ public struct Message: Sendable, Equatable {
   /// this can help distinguish between messages actually sent by the local user vs
   /// messages received on a secondary phone number registered with the same Apple ID.
   public let destinationCallerID: String?
+  /// Native Messages Polls metadata when the row is a Polls extension balloon
+  /// or a Polls vote update.
+  public let poll: MessagePollEvent?
 
   // Reaction metadata (populated when message is a reaction event)
   /// Whether this message is a reaction event (tapback add/remove)
@@ -334,7 +337,8 @@ public struct Message: Sendable, Equatable {
     attachmentsCount: Int,
     guid: String = "",
     routing: RoutingMetadata = RoutingMetadata(),
-    reaction: ReactionMetadata = ReactionMetadata()
+    reaction: ReactionMetadata = ReactionMetadata(),
+    poll: MessagePollEvent? = nil
   ) {
     self.rowID = rowID
     self.chatID = chatID
@@ -351,6 +355,7 @@ public struct Message: Sendable, Equatable {
     self.handleID = handleID
     self.attachmentsCount = attachmentsCount
     self.destinationCallerID = routing.destinationCallerID
+    self.poll = poll
     self.isReaction = reaction.isReaction
     self.reactionType = reaction.reactionType
     self.isReactionAdd = reaction.isReactionAdd
@@ -376,7 +381,8 @@ public struct Message: Sendable, Equatable {
     isReaction: Bool = false,
     reactionType: ReactionType? = nil,
     isReactionAdd: Bool? = nil,
-    reactedToGUID: String? = nil
+    reactedToGUID: String? = nil,
+    poll: MessagePollEvent? = nil
   ) {
     self.init(
       rowID: rowID,
@@ -401,7 +407,8 @@ public struct Message: Sendable, Equatable {
         reactionType: reactionType,
         isReactionAdd: isReactionAdd,
         reactedToGUID: reactedToGUID
-      )
+      ),
+      poll: poll
     )
   }
 }

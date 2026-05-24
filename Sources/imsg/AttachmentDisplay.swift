@@ -20,3 +20,19 @@ func attachmentMetadataLine(for meta: AttachmentMeta) -> String {
   }
   return line
 }
+
+func pollDisplayText(for poll: MessagePollEvent) -> String {
+  switch poll.kind {
+  case .created:
+    let question = poll.question ?? "poll"
+    let options = poll.options?.map(\.text).joined(separator: " / ") ?? ""
+    return options.isEmpty ? "[poll created] \(question)" : "[poll created] \(question): \(options)"
+  case .vote:
+    let participant = poll.vote?.participant ?? "someone"
+    let optionID = poll.vote?.optionID ?? "unknown option"
+    let action = poll.vote?.eventType ?? "selected"
+    return "[poll vote] \(participant) \(action) \(optionID)"
+  case .unknown:
+    return "[poll unknown]"
+  }
+}

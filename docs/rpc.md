@@ -200,6 +200,24 @@ Result:
 }
 ```
 
+### Native polls
+
+`poll.send` creates a native Apple Messages Polls extension balloon through the IMCore bridge. The bridge must be injected with `imsg launch`; the AppleScript transport cannot send native extension payloads.
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":"poll","method":"poll.send","params":{"chat_id":42,"question":"Dinner?","options":["Pizza","Sushi"]}}
+```
+
+Response:
+
+```json
+{"ok":true,"event":"imessage.poll.created","guid":"...","message_id":"...","poll":{"kind":"created","event":"imessage.poll.created","question":"Dinner?","options":[{"id":"...","text":"Pizza"},{"id":"...","text":"Sushi"}]}}
+```
+
+`messages.poll.send` is accepted as an alias for `poll.send`.
+
 ## Objects
 
 ### Chat
@@ -209,6 +227,8 @@ See [JSON output → Chat](json.md#chat). Every field documented there appears i
 ### Message
 
 See [JSON output → Message](json.md#message). When `include_reactions: true`, message notifications also include the reaction extension fields (`is_reaction`, `reaction_type`, `reaction_emoji`, `is_reaction_add`, `reacted_to_guid`).
+
+Native Apple Messages polls are emitted by `messages.history` and `watch.subscribe` with the same `poll` object documented in [JSON output → Native poll extension](json.md#native-poll-extension).
 
 `account_id`, `account_login`, `last_addressed_handle`, and outgoing `destination_caller_id` are read-only routing diagnostics; the AppleScript send API does not expose a `from` selector.
 

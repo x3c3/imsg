@@ -3,6 +3,8 @@ import SQLite
 
 struct MessageRowColumns {
   static let balloonBundleID = "balloon_bundle_id"
+  static let payloadData = "payload_data"
+  static let messageSummaryInfo = "message_summary_info"
 
   let rowID: String
   let chatID: String?
@@ -20,6 +22,9 @@ struct MessageRowColumns {
   let attachments: String
   let body: String
   let threadOriginatorGUID: String
+  let balloonBundleID: String
+  let payloadData: String
+  let messageSummaryInfo: String
 
   static func message(chatID: String?) -> MessageRowColumns {
     MessageRowColumns(
@@ -38,7 +43,10 @@ struct MessageRowColumns {
       associatedType: "associated_type",
       attachments: "attachments",
       body: "body",
-      threadOriginatorGUID: "thread_originator_guid"
+      threadOriginatorGUID: "thread_originator_guid",
+      balloonBundleID: MessageRowColumns.balloonBundleID,
+      payloadData: MessageRowColumns.payloadData,
+      messageSummaryInfo: MessageRowColumns.messageSummaryInfo
     )
   }
 }
@@ -58,13 +66,14 @@ struct DecodedMessageRow {
   let associatedType: Int?
   let attachments: Int
   let threadOriginatorGUID: String
+  let poll: MessagePollEvent?
 }
 
 struct MessageRowSelection {
   let selectList: String
   let columns: MessageRowColumns
 
-  init(store: MessageStore, includeChatID: Bool, includeBalloonBundleID: Bool = false) {
+  init(store: MessageStore, includeChatID: Bool) {
     let columns = MessageRowColumns.message(chatID: includeChatID ? "chat_id" : nil)
     let schema = store.schema
     let bodyColumn = schema.hasAttributedBody ? "m.attributedBody" : "NULL"
@@ -76,9 +85,13 @@ struct MessageRowSelection {
     let audioMessageColumn = schema.hasAudioMessageColumn ? "m.is_audio_message" : "0"
     let threadOriginatorColumn =
       schema.hasThreadOriginatorGUIDColumn ? "m.thread_originator_guid" : "NULL"
+    let balloonColumn = schema.hasBalloonBundleIDColumn ? "m.balloon_bundle_id" : "NULL"
+    let payloadDataColumn = schema.hasPayloadDataColumn ? "m.payload_data" : "NULL"
+    let summaryInfoColumn =
+      schema.hasMessageSummaryInfoColumn ? "m.message_summary_info" : "NULL"
     let chatColumn = includeChatID ? ", cmj.chat_id AS \(columns.chatID!)" : ""
 
-    var selectList = """
+    let selectList = """
       m.ROWID AS \(columns.rowID)\(chatColumn), m.handle_id AS \(columns.handleID),
              h.id AS \(columns.sender), IFNULL(m.text, '') AS \(columns.text),
              m.date AS \(columns.date), m.is_from_me AS \(columns.isFromMe),
@@ -89,13 +102,11 @@ struct MessageRowSelection {
              \(associatedTypeColumn) AS \(columns.associatedType),
              (SELECT COUNT(*) FROM message_attachment_join maj WHERE maj.message_id = m.ROWID) AS \(columns.attachments),
              \(bodyColumn) AS \(columns.body),
-             \(threadOriginatorColumn) AS \(columns.threadOriginatorGUID)
+             \(threadOriginatorColumn) AS \(columns.threadOriginatorGUID),
+             \(balloonColumn) AS \(columns.balloonBundleID),
+             \(payloadDataColumn) AS \(columns.payloadData),
+             \(summaryInfoColumn) AS \(columns.messageSummaryInfo)
       """
-    if includeBalloonBundleID {
-      let balloonColumn = schema.hasBalloonBundleIDColumn ? "m.balloon_bundle_id" : "NULL"
-      selectList += ",\n             \(balloonColumn) AS \(MessageRowColumns.balloonBundleID)"
-    }
-
     self.selectList = selectList
     self.columns = columns
   }
@@ -162,7 +173,8 @@ extension MessageStore {
                 ? nil : decoded.destinationCallerID,
               replyToText: parent?.text,
               replyToSender: parent?.sender
-            )
+            ),
+            poll: decoded.poll
           ))
       }
       return messages
@@ -265,7 +277,8 @@ extension MessageStore {
               reactionType: reaction.reactionType,
               isReactionAdd: reaction.isReactionAdd,
               reactedToGUID: reaction.reactedToGUID
-            )
+            ),
+            poll: decoded.poll
           ))
       }
       return messages
@@ -324,7 +337,8 @@ extension MessageStore {
               ? nil : decoded.destinationCallerID,
             replyToText: parent?.text,
             replyToSender: parent?.sender
-          )
+          ),
+          poll: decoded.poll
         )
       }
       return nil
@@ -388,6 +402,9 @@ extension MessageStore {
     let attachments = try intValue(row, columns.attachments) ?? 0
     let body = try dataValue(row, columns.body)
     let threadOriginatorGUID = try stringValue(row, columns.threadOriginatorGUID)
+    let balloonBundleID = try stringValue(row, columns.balloonBundleID)
+    let payloadData = try dataValue(row, columns.payloadData)
+    let messageSummaryInfo = try dataValue(row, columns.messageSummaryInfo)
 
     var resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
     if isAudioMessage, let transcription = try audioTranscription(for: rowID) {
@@ -398,6 +415,16 @@ extension MessageStore {
     if resolvedSender.isEmpty && !destinationCallerID.isEmpty {
       resolvedSender = destinationCallerID
     }
+
+    let poll = MessagePollDecoder.decode(
+      balloonBundleID: balloonBundleID,
+      payloadData: payloadData,
+      messageSummaryInfo: messageSummaryInfo,
+      associatedMessageType: associatedType,
+      associatedMessageGUID: associatedGUID,
+      messageGUID: guid,
+      sender: resolvedSender
+    )
 
     return DecodedMessageRow(
       rowID: rowID,
@@ -413,7 +440,8 @@ extension MessageStore {
       associatedGUID: associatedGUID,
       associatedType: associatedType,
       attachments: attachments,
-      threadOriginatorGUID: threadOriginatorGUID
+      threadOriginatorGUID: threadOriginatorGUID,
+      poll: poll
     )
   }
 

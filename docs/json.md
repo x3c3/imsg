@@ -56,6 +56,7 @@ Returned by `imsg history`, `imsg watch`, and the JSON-RPC `messages.history` an
 | `created_at` | ISO8601 | Message timestamp. |
 | `attachments` | array | Present when `--attachments` is set. See below. |
 | `thread_originator_guid` | string | For inline-reply threads. |
+| `poll` | object | Present for native Apple Messages Polls creation and vote rows. See below. |
 
 ### Reaction extensions
 
@@ -70,6 +71,41 @@ Present on `imsg watch --reactions` events:
 | `reacted_to_guid` | string | The message guid this tapback targets. |
 
 `history` deliberately hides reaction rows so they don't duplicate the reacted message. Reaction events only surface in the live watch stream.
+
+### Native poll extension
+
+Native Apple Messages polls are emitted as normal messages with a `poll` object. Existing message fields stay present and unchanged; poll rows often have an empty `text` field because the useful data is stored in the Messages extension payload.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `kind` | string | `created`, `vote`, or `unknown`. |
+| `event` | string | Route-friendly value: `imessage.poll.created`, `imessage.poll.voted`, or `imessage.poll.unknown`. |
+| `poll_guid` | string | The poll's source message GUID when known. |
+| `question` | string | Poll title or question when decoded. |
+| `options` | array | Poll options, each with `id` and `text`. |
+| `vote` | object | First decoded vote update, with `option_id`, `participant`, and `event_type` when present. |
+| `votes` | array | All decoded vote entries when the payload carries more than one. |
+| `original_guid` | string | For vote rows, the original poll message GUID from `associated_message_guid`. |
+| `creator` | string | Creator handle when the payload includes it. |
+| `participants` | array | Handles seen in decoded poll metadata. |
+| `metadata` | object | Raw-safe diagnostics only: bundle id, payload byte counts, URL scheme/host, query keys, and associated message type. Raw private payload bytes are never emitted. |
+
+Example:
+
+```json
+{
+  "poll": {
+    "kind": "created",
+    "event": "imessage.poll.created",
+    "poll_guid": "A1B2",
+    "question": "Dinner?",
+    "options": [
+      { "id": "opt-1", "text": "Pizza" },
+      { "id": "opt-2", "text": "Sushi" }
+    ]
+  }
+}
+```
 
 ## Attachment
 

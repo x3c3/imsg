@@ -76,6 +76,7 @@ struct MessagePayload: Codable {
   /// this can help distinguish between messages actually sent by the local user vs
   /// messages received on a secondary phone number registered with the same Apple ID.
   let destinationCallerID: String?
+  let poll: MessagePollEvent?
 
   // Reaction event metadata (populated when this message is a reaction event)
   let isReaction: Bool?
@@ -108,6 +109,7 @@ struct MessagePayload: Codable {
       ReactionPayload(reaction: $0, senderName: reactionSenderNames[$0.rowID])
     }
     self.destinationCallerID = message.destinationCallerID
+    self.poll = message.poll
 
     // Reaction event metadata
     if message.isReaction {
@@ -141,6 +143,7 @@ struct MessagePayload: Codable {
     case attachments
     case reactions
     case destinationCallerID = "destination_caller_id"
+    case poll
     case isReaction = "is_reaction"
     case reactionType = "reaction_type"
     case reactionEmoji = "reaction_emoji"
