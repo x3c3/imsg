@@ -142,12 +142,17 @@ public struct MessagePollEvent: Codable, Sendable, Equatable {
 
 public enum MessagePollDecoder {
   public static let pollsBundleIdentifier = "com.apple.messages.Polls"
-  private static let voteAssociatedMessageType = 4000
+  static let voteAssociatedMessageType = 4000
 
   public static func isPollsBalloonBundleID(_ value: String) -> Bool {
     guard !value.isEmpty else { return false }
     if value == pollsBundleIdentifier { return true }
     return value.split(separator: ":").last.map(String.init) == pollsBundleIdentifier
+  }
+
+  static func isPollCandidate(balloonBundleID: String, associatedMessageType: Int?) -> Bool {
+    isPollsBalloonBundleID(balloonBundleID)
+      || associatedMessageType == voteAssociatedMessageType
   }
 
   public static func decode(
@@ -180,7 +185,6 @@ public enum MessagePollDecoder {
 
     let originalGUID = normalizedAssociatedGUID(associatedMessageGUID)
     let senderHandle = sender.isEmpty ? nil : sender
-    let creator = facts.creator ?? senderHandle
     let votes = facts.votes.map { vote in
       MessagePollVote(
         optionID: vote.optionID,
@@ -190,7 +194,7 @@ public enum MessagePollDecoder {
       )
     }
     var participantHandles = facts.participants
-    if let creator { participantHandles.append(creator) }
+    if let creator = facts.creator { participantHandles.append(creator) }
     participantHandles.append(contentsOf: votes.compactMap { $0.participant })
     let participants = sortedUnique(participantHandles)
 
@@ -204,20 +208,23 @@ public enum MessagePollDecoder {
         vote: votes.first,
         votes: votes,
         originalGUID: originalGUID,
-        creator: creator,
+        creator: facts.creator,
         participants: participants,
         metadata: metadata
       )
     }
 
     if facts.question != nil || !facts.options.isEmpty {
+      let creator = facts.creator ?? senderHandle
+      var creationParticipants = participantHandles
+      if let creator { creationParticipants.append(creator) }
       return MessagePollEvent(
         kind: .created,
         pollGUID: firstNonEmpty(facts.pollGUID, messageGUID),
         question: facts.question,
         options: facts.options,
         creator: creator,
-        participants: participants,
+        participants: sortedUnique(creationParticipants),
         metadata: metadata
       )
     }
@@ -226,7 +233,7 @@ public enum MessagePollDecoder {
       kind: .unknown,
       pollGUID: firstNonEmpty(facts.pollGUID, originalGUID, messageGUID),
       originalGUID: originalGUID,
-      creator: creator,
+      creator: facts.creator,
       participants: participants,
       metadata: metadata
     )

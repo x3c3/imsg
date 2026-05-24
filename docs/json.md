@@ -86,7 +86,7 @@ Native Apple Messages polls are emitted as normal messages with a `poll` object.
 | `vote` | object | First decoded vote update, with `option_id`, `participant`, and `event_type` when present. |
 | `votes` | array | All decoded vote entries when the payload carries more than one. |
 | `original_guid` | string | For vote rows, the original poll message GUID from `associated_message_guid`. |
-| `creator` | string | Creator handle when the payload includes it. |
+| `creator` | string | Creator handle when the payload includes it. Creation rows may fall back to the sender handle. |
 | `participants` | array | Handles seen in decoded poll metadata. |
 | `metadata` | object | Raw-safe diagnostics only: bundle id, payload byte counts, URL scheme/host, query keys, and associated message type. Raw private payload bytes are never emitted. |
 

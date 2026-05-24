@@ -96,6 +96,32 @@ func decodesPollCreationPayloadFromAppleDataURLEnvelope() throws {
 }
 
 @Test
+func decodesPollCreationUsesSenderAsCreatorFallback() throws {
+  let definition: [String: Any] = [
+    "title": "Dinner plan?",
+    "orderedPollOptions": [
+      ["optionIdentifier": "choice-a", "pollOptionText": "Pizza"],
+      ["optionIdentifier": "choice-b", "pollOptionText": "Sushi"],
+    ],
+  ]
+  let payload = try applePollEnvelopePayload(jsonObject: definition)
+
+  let poll = MessagePollDecoder.decode(
+    balloonBundleID: testPollBundleID,
+    payloadData: payload,
+    messageSummaryInfo: Data(),
+    associatedMessageType: nil,
+    associatedMessageGUID: "",
+    messageGUID: "poll-message-guid",
+    sender: "+15550001000"
+  )
+
+  #expect(poll?.kind == .created)
+  #expect(poll?.creator == "+15550001000")
+  #expect(poll?.participants == ["+15550001000"])
+}
+
+@Test
 func decodesPollVotePayloadFromBinaryPlistURL() throws {
   let response: [String: Any] = [
     "votes": [
@@ -136,6 +162,34 @@ func decodesPollVotePayloadFromBinaryPlistURL() throws {
         eventType: "selected",
         serverTime: "123456"
       ))
+  #expect(poll?.participants == ["+15550002000"])
+}
+
+@Test
+func decodesPollVoteDoesNotInferCreatorFromSender() throws {
+  let response: [String: Any] = [
+    "votes": [
+      [
+        "voteOptionIdentifier": "choice-b",
+        "eventType": "selected",
+      ]
+    ]
+  ]
+  let payload = try applePollEnvelopePayload(jsonObject: response)
+
+  let poll = MessagePollDecoder.decode(
+    balloonBundleID: testPollBundleID,
+    payloadData: payload,
+    messageSummaryInfo: Data(),
+    associatedMessageType: 4000,
+    associatedMessageGUID: "original-poll-guid",
+    messageGUID: "vote-row-guid",
+    sender: "+15550002000"
+  )
+
+  #expect(poll?.kind == .vote)
+  #expect(poll?.creator == nil)
+  #expect(poll?.vote?.participant == "+15550002000")
   #expect(poll?.participants == ["+15550002000"])
 }
 
@@ -308,6 +362,82 @@ func messageStoreAttachesDecodedPollMetadata() throws {
 
   let normalMessage = try #require(messages.first { $0.guid == "normal-row-guid" })
   #expect(normalMessage.poll == nil)
+}
+
+@Test
+func messageStoreDecodesPollVoteRowsWithPayloadGate() throws {
+  let db = try Connection(.inMemory)
+  var options = MessageDatabaseFixture.SchemaOptions()
+  options.includeReactionColumns = true
+  options.includeBalloonBundleID = true
+  options.includePayloadData = true
+  options.includeMessageSummaryInfo = true
+  try MessageDatabaseFixture.createSchema(db, options: options)
+
+  try db.run(
+    """
+    INSERT INTO chat(ROWID, chat_identifier, guid, display_name, service_name)
+    VALUES (1, '+15550001000', 'iMessage;+;chat-test', 'Poll Test', 'iMessage')
+    """
+  )
+  try db.run("INSERT INTO handle(ROWID, id) VALUES (1, '+15550002000')")
+
+  let response: [String: Any] = [
+    "votes": [
+      ["voteOptionIdentifier": "choice-a"]
+    ]
+  ]
+  let votePayload = try applePollEnvelopePayload(jsonObject: response)
+  let voteBlob = Blob(bytes: [UInt8](votePayload))
+  let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+  try db.run(
+    """
+    INSERT INTO message(
+      ROWID, handle_id, text, guid, associated_message_guid, associated_message_type,
+      balloon_bundle_id, payload_data, message_summary_info, date, is_from_me, service
+    )
+    VALUES (1, 1, '', 'vote-row-guid', 'p/original-poll-guid', 4000, NULL, ?, NULL, ?, 0, 'iMessage')
+    """,
+    voteBlob,
+    TestDatabase.appleEpoch(now)
+  )
+  try db.run("INSERT INTO chat_message_join(chat_id, message_id) VALUES (1, 1)")
+
+  let store = try MessageStore(connection: db, path: ":memory:")
+  let messages = try store.messages(chatID: 1, limit: 10)
+  let voteMessage = try #require(messages.first { $0.guid == "vote-row-guid" })
+
+  #expect(voteMessage.poll?.kind == .vote)
+  #expect(voteMessage.poll?.originalGUID == "original-poll-guid")
+  #expect(voteMessage.poll?.creator == nil)
+  #expect(voteMessage.poll?.vote?.participant == "+15550002000")
+}
+
+@Test
+func messageRowSelectionGatesPollPayloadBlobs() throws {
+  let db = try Connection(.inMemory)
+  var options = MessageDatabaseFixture.SchemaOptions()
+  options.includeReactionColumns = true
+  options.includeBalloonBundleID = true
+  options.includePayloadData = true
+  options.includeMessageSummaryInfo = true
+  try MessageDatabaseFixture.createSchema(db, options: options)
+
+  let store = try MessageStore(connection: db, path: ":memory:")
+  let query = ChatMessagesQuery(
+    store: store,
+    chatID: ChatID(rawValue: 1),
+    limit: 10,
+    filter: nil
+  )
+
+  #expect(query.selection.selectList.contains("CASE WHEN"))
+  #expect(query.selection.selectList.contains("m.associated_message_type = 4000"))
+  #expect(query.selection.selectList.contains("m.payload_data ELSE NULL"))
+  #expect(query.selection.selectList.contains("m.message_summary_info ELSE NULL"))
+  #expect(!query.selection.selectList.contains("m.payload_data AS payload_data"))
+  #expect(!query.selection.selectList.contains("m.message_summary_info AS message_summary_info"))
 }
 
 private func pollURL(queryName: String, object: [String: Any]) throws -> URL {

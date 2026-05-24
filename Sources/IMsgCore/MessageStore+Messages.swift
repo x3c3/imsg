@@ -86,9 +86,13 @@ struct MessageRowSelection {
     let threadOriginatorColumn =
       schema.hasThreadOriginatorGUIDColumn ? "m.thread_originator_guid" : "NULL"
     let balloonColumn = schema.hasBalloonBundleIDColumn ? "m.balloon_bundle_id" : "NULL"
-    let payloadDataColumn = schema.hasPayloadDataColumn ? "m.payload_data" : "NULL"
+    let pollCandidatePredicate = Self.pollCandidatePredicate(schema: schema)
+    let payloadDataColumn =
+      schema.hasPayloadDataColumn
+      ? "CASE WHEN \(pollCandidatePredicate) THEN m.payload_data ELSE NULL END" : "NULL"
     let summaryInfoColumn =
-      schema.hasMessageSummaryInfoColumn ? "m.message_summary_info" : "NULL"
+      schema.hasMessageSummaryInfoColumn
+      ? "CASE WHEN \(pollCandidatePredicate) THEN m.message_summary_info ELSE NULL END" : "NULL"
     let chatColumn = includeChatID ? ", cmj.chat_id AS \(columns.chatID!)" : ""
 
     let selectList = """
@@ -109,6 +113,23 @@ struct MessageRowSelection {
       """
     self.selectList = selectList
     self.columns = columns
+  }
+
+  private static func pollCandidatePredicate(schema: MessageStoreSchema) -> String {
+    let pollBundle = sqlStringLiteral(MessagePollDecoder.pollsBundleIdentifier)
+    let pollBalloonPredicate =
+      schema.hasBalloonBundleIDColumn
+      ? "(m.balloon_bundle_id = \(pollBundle) OR m.balloon_bundle_id LIKE '%:' || \(pollBundle))"
+      : "0"
+    let votePredicate =
+      schema.hasReactionColumns
+      ? "m.associated_message_type = \(MessagePollDecoder.voteAssociatedMessageType)"
+      : "0"
+    return "(\(pollBalloonPredicate) OR \(votePredicate))"
+  }
+
+  private static func sqlStringLiteral(_ value: String) -> String {
+    "'\(value.replacingOccurrences(of: "'", with: "''"))'"
   }
 }
 
@@ -403,8 +424,6 @@ extension MessageStore {
     let body = try dataValue(row, columns.body)
     let threadOriginatorGUID = try stringValue(row, columns.threadOriginatorGUID)
     let balloonBundleID = try stringValue(row, columns.balloonBundleID)
-    let payloadData = try dataValue(row, columns.payloadData)
-    let messageSummaryInfo = try dataValue(row, columns.messageSummaryInfo)
 
     var resolvedText = text.isEmpty ? TypedStreamParser.parseAttributedBody(body) : text
     if isAudioMessage, let transcription = try audioTranscription(for: rowID) {
@@ -416,15 +435,23 @@ extension MessageStore {
       resolvedSender = destinationCallerID
     }
 
-    let poll = MessagePollDecoder.decode(
+    let poll: MessagePollEvent?
+    if MessagePollDecoder.isPollCandidate(
       balloonBundleID: balloonBundleID,
-      payloadData: payloadData,
-      messageSummaryInfo: messageSummaryInfo,
-      associatedMessageType: associatedType,
-      associatedMessageGUID: associatedGUID,
-      messageGUID: guid,
-      sender: resolvedSender
-    )
+      associatedMessageType: associatedType
+    ) {
+      poll = MessagePollDecoder.decode(
+        balloonBundleID: balloonBundleID,
+        payloadData: try dataValue(row, columns.payloadData),
+        messageSummaryInfo: try dataValue(row, columns.messageSummaryInfo),
+        associatedMessageType: associatedType,
+        associatedMessageGUID: associatedGUID,
+        messageGUID: guid,
+        sender: resolvedSender
+      )
+    } else {
+      poll = nil
+    }
 
     return DecodedMessageRow(
       rowID: rowID,
