@@ -93,6 +93,66 @@ func latestSentMessageFallsBackToNewestOutgoingTextWithoutChatFilter() throws {
 }
 
 @Test
+func latestSentMessageMatchesAttributedBodyText() throws {
+  let db = try makeSentMessageDatabase()
+  let now = Date()
+  let text = "body fallback"
+  try insertAttributedSentMessageFixture(
+    db,
+    rowID: 10,
+    chatID: 1,
+    text: text,
+    guid: "body-guid",
+    date: now
+  )
+  let store = try MessageStore(connection: db, path: ":memory:")
+
+  let message = try store.latestSentMessage(
+    matchingText: text,
+    chatID: 1,
+    since: now.addingTimeInterval(-1)
+  )
+
+  #expect(message?.rowID == 10)
+  #expect(message?.guid == "body-guid")
+  #expect(message?.text == text)
+}
+
+@Test
+func latestSentMessagePrefersNewestDecodedAttributedBodyMatch() throws {
+  let db = try makeSentMessageDatabase()
+  let now = Date()
+  let text = "repeat"
+  try insertSentMessageFixture(
+    db,
+    rowID: 10,
+    chatID: 1,
+    text: text,
+    guid: "older-plain-guid",
+    date: now.addingTimeInterval(-1),
+    isFromMe: true
+  )
+  try insertAttributedSentMessageFixture(
+    db,
+    rowID: 11,
+    chatID: 1,
+    text: text,
+    guid: "newer-body-guid",
+    date: now
+  )
+  let store = try MessageStore(connection: db, path: ":memory:")
+
+  let message = try store.latestSentMessage(
+    matchingText: text,
+    chatID: 1,
+    since: now.addingTimeInterval(-2)
+  )
+
+  #expect(message?.rowID == 11)
+  #expect(message?.guid == "newer-body-guid")
+}
+
+@Test
 func chatInfoMatchingTargetHandlesAnyGroupPolarityMismatch() throws {
   let db = try makeSentMessageDatabase()
   try db.run(
@@ -143,6 +203,7 @@ private func makeSentMessageDatabase() throws -> Connection {
       ROWID INTEGER PRIMARY KEY,
       handle_id INTEGER,
       text TEXT,
+      attributedBody BLOB,
       guid TEXT,
       associated_message_guid TEXT,
       associated_message_type INTEGER,
@@ -200,6 +261,31 @@ private func insertSentMessageFixture(
     guid,
     TestDatabase.appleEpoch(date),
     isFromMe ? 1 : 0
+  )
+  try db.run("INSERT INTO chat_message_join(chat_id, message_id) VALUES (?, ?)", chatID, rowID)
+}
+
+private func insertAttributedSentMessageFixture(
+  _ db: Connection,
+  rowID: Int64,
+  chatID: Int64,
+  text: String,
+  guid: String,
+  date: Date
+) throws {
+  let bodyBytes = [UInt8(0x01), UInt8(0x2b)] + Array(text.utf8) + [0x86, 0x84]
+  try db.run(
+    """
+    INSERT INTO message(
+      ROWID, handle_id, text, attributedBody, guid, associated_message_guid,
+      associated_message_type, date, is_from_me, service
+    )
+    VALUES (?, 1, NULL, ?, ?, NULL, 0, ?, 1, 'iMessage')
+    """,
+    rowID,
+    Blob(bytes: bodyBytes),
+    guid,
+    TestDatabase.appleEpoch(date)
   )
   try db.run("INSERT INTO chat_message_join(chat_id, message_id) VALUES (?, ?)", chatID, rowID)
 }
