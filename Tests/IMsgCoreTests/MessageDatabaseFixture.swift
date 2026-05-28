@@ -7,9 +7,13 @@ enum MessageDatabaseFixture {
     var includeAttributedBody = false
     var includeReactionColumns = false
     var includeThreadOriginatorGUID = false
+    var includeThreadOriginatorPart = false
     var includeDestinationCallerID = false
     var includeAudioMessage = false
     var includeBalloonBundleID = false
+    var includePayloadData = false
+    var includeMessageSummaryInfo = false
+    var includeReplyToGUID = false
     var includeAttachmentUserInfo = false
     var includeChatMessageDate = false
     var includeChatRouting = true
@@ -24,10 +28,15 @@ enum MessageDatabaseFixture {
       : ""
     let threadOriginatorColumn =
       options.includeThreadOriginatorGUID ? "thread_originator_guid TEXT," : ""
+    let threadOriginatorPartColumn =
+      options.includeThreadOriginatorPart ? "thread_originator_part TEXT," : ""
     let destinationCallerColumn =
       options.includeDestinationCallerID ? "destination_caller_id TEXT," : ""
     let audioMessageColumn = options.includeAudioMessage ? "is_audio_message INTEGER," : ""
     let balloonColumn = options.includeBalloonBundleID ? "balloon_bundle_id TEXT," : ""
+    let payloadDataColumn = options.includePayloadData ? "payload_data BLOB," : ""
+    let summaryInfoColumn = options.includeMessageSummaryInfo ? "message_summary_info BLOB," : ""
+    let replyToColumn = options.includeReplyToGUID ? "reply_to_guid TEXT," : ""
 
     try db.execute(
       """
@@ -38,9 +47,13 @@ enum MessageDatabaseFixture {
         \(attributedBodyColumn)
         \(reactionColumns)
         \(threadOriginatorColumn)
+        \(threadOriginatorPartColumn)
         \(destinationCallerColumn)
         \(audioMessageColumn)
         \(balloonColumn)
+        \(payloadDataColumn)
+        \(summaryInfoColumn)
+        \(replyToColumn)
         date INTEGER,
         is_from_me INTEGER,
         service TEXT

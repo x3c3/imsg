@@ -59,6 +59,7 @@ func messagePayloadIncludesChatFields() throws {
     guid: "msg-guid-5",
     replyToGUID: "msg-guid-1",
     threadOriginatorGUID: "thread-guid-5",
+    threadOriginatorPart: "0:0:5",
     destinationCallerID: "me@icloud.com"
   )
   let chatInfo = ChatInfo(
@@ -100,6 +101,7 @@ func messagePayloadIncludesChatFields() throws {
   #expect(payload["reply_to_guid"] as? String == "msg-guid-1")
   #expect(payload["destination_caller_id"] as? String == "me@icloud.com")
   #expect(payload["thread_originator_guid"] as? String == "thread-guid-5")
+  #expect(payload["thread_originator_part"] as? String == "0:0:5")
   #expect(payload["chat_identifier"] as? String == "iMessage;+;chat123")
   #expect(payload["chat_name"] as? String == "Group")
   #expect(payload["is_group"] as? Bool == true)
@@ -110,6 +112,47 @@ func messagePayloadIncludesChatFields() throws {
   #expect(
     (payload["reactions"] as? [[String: Any]])?.first?["emoji"] as? String
       == ReactionType.like.emoji)
+}
+
+@Test
+func messagePayloadIncludesPollObject() throws {
+  let poll = MessagePollEvent(
+    kind: .created,
+    pollGUID: "poll-guid",
+    question: "Choose?",
+    options: [
+      MessagePollOption(id: "choice-a", text: "A"),
+      MessagePollOption(id: "choice-b", text: "B"),
+    ]
+  )
+  let message = Message(
+    rowID: 12,
+    chatID: 10,
+    sender: "+123",
+    text: "",
+    date: Date(timeIntervalSince1970: 3),
+    isFromMe: false,
+    service: "iMessage",
+    handleID: 1,
+    attachmentsCount: 0,
+    guid: "poll-row-guid",
+    poll: poll
+  )
+
+  let payload = try messagePayload(
+    message: message,
+    chatInfo: nil,
+    participants: [],
+    attachments: [],
+    reactions: []
+  )
+
+  let pollPayload = try #require(payload["poll"] as? [String: Any])
+  #expect(pollPayload["kind"] as? String == "created")
+  #expect(pollPayload["event"] as? String == "imessage.poll.created")
+  #expect(pollPayload["poll_guid"] as? String == "poll-guid")
+  #expect(pollPayload["question"] as? String == "Choose?")
+  #expect((pollPayload["options"] as? [[String: Any]])?.count == 2)
 }
 
 @Test
@@ -126,6 +169,7 @@ func messagePayloadExposesReplyParentSnakeCaseKeys() throws {
     attachmentsCount: 0,
     guid: "reply-guid",
     threadOriginatorGUID: "parent-guid",
+    threadOriginatorPart: "0:0:47",
     replyToText: "Should I lead with calendar, family, or email?",
     replyToSender: "+123"
   )
@@ -142,6 +186,7 @@ func messagePayloadExposesReplyParentSnakeCaseKeys() throws {
   )
   #expect(payload["reply_to_sender"] as? String == "+123")
   #expect(payload["thread_originator_guid"] as? String == "parent-guid")
+  #expect(payload["thread_originator_part"] as? String == "0:0:47")
 }
 
 @Test

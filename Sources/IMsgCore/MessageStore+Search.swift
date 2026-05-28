@@ -57,6 +57,7 @@ extension MessageStore {
     return try withConnection { db in
       var messages: [Message] = []
       var parentCache: ReplyParentCache = [:]
+      var pollOptionCache = PollOptionTextCache()
       let rows = try db.prepareRowIterator(query.sql, bindings: query.bindings)
       while let row = try rows.failableNext() {
         let decoded = try decodeMessageRow(
@@ -64,12 +65,16 @@ extension MessageStore {
           columns: query.selection.columns,
           fallbackChatID: query.fallbackChatID
         )
-        let replyToGUID = replyToGUID(
-          associatedGuid: decoded.associatedGUID,
-          associatedType: decoded.associatedType
+        let poll = try enrichedPollEvent(
+          decoded.poll,
+          db: db,
+          cache: &pollOptionCache
         )
+        let replyToGUID = routedReplyToGUID(decoded)
         let threadOriginatorGUID =
           decoded.threadOriginatorGUID.isEmpty ? nil : decoded.threadOriginatorGUID
+        let threadOriginatorPart =
+          decoded.threadOriginatorPart.isEmpty ? nil : decoded.threadOriginatorPart
         let parent = enrichedReplyContext(
           db,
           replyToGUID: replyToGUID,
@@ -91,11 +96,13 @@ extension MessageStore {
             routing: Message.RoutingMetadata(
               replyToGUID: replyToGUID,
               threadOriginatorGUID: threadOriginatorGUID,
+              threadOriginatorPart: threadOriginatorPart,
               destinationCallerID: decoded.destinationCallerID.isEmpty
                 ? nil : decoded.destinationCallerID,
               replyToText: parent?.text,
               replyToSender: parent?.sender
-            )
+            ),
+            poll: poll
           ))
       }
       return messages

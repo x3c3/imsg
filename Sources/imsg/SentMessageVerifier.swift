@@ -11,7 +11,7 @@ enum SentMessageVerifier {
     guard !options.text.isEmpty else { return nil }
 
     let lowerBound = sentAt.addingTimeInterval(-2)
-    let deadline = Date().addingTimeInterval(2)
+    let deadline = Date().addingTimeInterval(8)
     repeat {
       if Task.isCancelled { return nil }
       if let message = try store.latestSentMessage(

@@ -63,6 +63,37 @@ If a message is still empty, the source row genuinely had no text — usually a 
 
 Tapback rows (`Liked "..."`, `Loved "..."`, etc.) are hidden from `history` output by design. They'd otherwise duplicate every reacted message. To see tapbacks, use [`imsg watch --reactions`](watch.md#reactions); the live stream surfaces add and remove events with `is_reaction`, `reaction_type`, and `reacted_to_guid`.
 
+## Native polls
+
+Native Apple Messages polls are decoded when Messages stores them as the Polls extension balloon (`com.apple.messages.Polls`). Creation rows include `poll.kind == "created"` with the question and options when available. Vote update rows include `poll.kind == "vote"` and `poll.original_guid` pointing back to the poll message.
+
+```bash
+imsg history --chat-id 42 --json \
+  | jq -c 'select(.poll != null) | {id, guid, poll}'
+```
+
+Unknown or changed Polls payload variants are still emitted with `poll.kind == "unknown"` and raw-safe metadata. `imsg` does not emit the private raw payload bytes.
+
+Native poll creation is available through the bridge:
+
+```bash
+imsg poll send --chat 'iMessage;-;+15551234567' \
+  --question 'Dinner?' \
+  --option 'Pizza' \
+  --option 'Sushi'
+```
+
+You can also use `--chat-id <id>` from `imsg chats`.
+
+### Manual native poll test plan
+
+1. Create a native poll in Messages from an iPhone or Mac.
+2. Run `imsg history --chat-id <chat-id> --json | jq -c 'select(.poll != null) | {id, guid, poll}'` and verify the creation row has `poll.kind == "created"` with decoded question/options.
+3. Vote on the poll from another participant/device.
+4. Run `imsg watch --chat-id <chat-id> --json | jq -c 'select(.poll != null)'` while the vote happens, or re-run history, and verify the vote row has `poll.kind == "vote"`, `poll.original_guid` set to the original poll GUID, and `poll.vote.option_id` set.
+5. Send a poll with `imsg poll send --chat-id <id> --question "..." --option "A" --option "B"` and verify it renders as a native Messages poll on iOS/macOS.
+6. If Apple changes the private Polls payload shape, verify the row still emits `poll.kind == "unknown"` with metadata and no raw payload bytes.
+
 ## Performance
 
 JSON history batches attachment and reaction lookups in one pass per request, so large `--limit` values stay cheap. Reading 1000 messages with `--attachments --json` is bound by SQLite, not by per-row queries.
@@ -81,4 +112,4 @@ See [JSON output](json.md#message) for the canonical schema. Every history resul
 
 `id`, `chat_id`, `chat_identifier`, `chat_guid`, `chat_name`, `participants`, `is_group`, `guid`, `reply_to_guid`, `destination_caller_id`, `sender`, `sender_name`, `is_from_me`, `text`, `created_at`.
 
-When `--attachments` is set, also: `attachments[]`. Reactions only appear in `watch --reactions` output.
+When `--attachments` is set, also: `attachments[]`. Native polls include `poll`. Reactions only appear in `watch --reactions` output.

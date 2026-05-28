@@ -95,7 +95,8 @@ enum HistoryCommand {
       let sender =
         message.isFromMe
         ? message.sender : (contacts.displayName(for: message.sender) ?? message.sender)
-      StdoutWriter.writeLine("\(timestamp) [\(direction)] \(sender): \(message.text)")
+      let body = message.poll.map { pollDisplayText(for: $0) } ?? message.text
+      StdoutWriter.writeLine("\(timestamp) [\(direction)] \(sender): \(body)")
       if message.attachmentsCount > 0 {
         if showAttachments {
           let metas = try store.attachments(for: message.rowID, options: attachmentOptions)

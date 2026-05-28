@@ -250,6 +250,7 @@ public struct Message: Sendable, Equatable {
   public struct RoutingMetadata: Sendable, Equatable {
     public let replyToGUID: String?
     public let threadOriginatorGUID: String?
+    public let threadOriginatorPart: String?
     public let destinationCallerID: String?
     public let replyToText: String?
     public let replyToSender: String?
@@ -257,12 +258,14 @@ public struct Message: Sendable, Equatable {
     public init(
       replyToGUID: String? = nil,
       threadOriginatorGUID: String? = nil,
+      threadOriginatorPart: String? = nil,
       destinationCallerID: String? = nil,
       replyToText: String? = nil,
       replyToSender: String? = nil
     ) {
       self.replyToGUID = replyToGUID
       self.threadOriginatorGUID = threadOriginatorGUID
+      self.threadOriginatorPart = threadOriginatorPart
       self.destinationCallerID = destinationCallerID
       self.replyToText = replyToText
       self.replyToSender = replyToSender
@@ -293,6 +296,7 @@ public struct Message: Sendable, Equatable {
   public let guid: String
   public let replyToGUID: String?
   public let threadOriginatorGUID: String?
+  public let threadOriginatorPart: String?
   /// Text of the message this one replies to (Threader reply or non-reaction
   /// association). Resolved by joining `replyToGUID` or `threadOriginatorGUID`
   /// back to the parent row; nil when no parent exists or it is no longer
@@ -311,6 +315,9 @@ public struct Message: Sendable, Equatable {
   /// this can help distinguish between messages actually sent by the local user vs
   /// messages received on a secondary phone number registered with the same Apple ID.
   public let destinationCallerID: String?
+  /// Native Messages Polls metadata when the row is a Polls extension balloon
+  /// or a Polls vote update.
+  public let poll: MessagePollEvent?
 
   // Reaction metadata (populated when message is a reaction event)
   /// Whether this message is a reaction event (tapback add/remove)
@@ -334,13 +341,15 @@ public struct Message: Sendable, Equatable {
     attachmentsCount: Int,
     guid: String = "",
     routing: RoutingMetadata = RoutingMetadata(),
-    reaction: ReactionMetadata = ReactionMetadata()
+    reaction: ReactionMetadata = ReactionMetadata(),
+    poll: MessagePollEvent? = nil
   ) {
     self.rowID = rowID
     self.chatID = chatID
     self.guid = guid
     self.replyToGUID = routing.replyToGUID
     self.threadOriginatorGUID = routing.threadOriginatorGUID
+    self.threadOriginatorPart = routing.threadOriginatorPart
     self.replyToText = routing.replyToText
     self.replyToSender = routing.replyToSender
     self.sender = sender
@@ -351,6 +360,7 @@ public struct Message: Sendable, Equatable {
     self.handleID = handleID
     self.attachmentsCount = attachmentsCount
     self.destinationCallerID = routing.destinationCallerID
+    self.poll = poll
     self.isReaction = reaction.isReaction
     self.reactionType = reaction.reactionType
     self.isReactionAdd = reaction.isReactionAdd
@@ -370,13 +380,15 @@ public struct Message: Sendable, Equatable {
     guid: String = "",
     replyToGUID: String? = nil,
     threadOriginatorGUID: String? = nil,
+    threadOriginatorPart: String? = nil,
     destinationCallerID: String? = nil,
     replyToText: String? = nil,
     replyToSender: String? = nil,
     isReaction: Bool = false,
     reactionType: ReactionType? = nil,
     isReactionAdd: Bool? = nil,
-    reactedToGUID: String? = nil
+    reactedToGUID: String? = nil,
+    poll: MessagePollEvent? = nil
   ) {
     self.init(
       rowID: rowID,
@@ -392,6 +404,7 @@ public struct Message: Sendable, Equatable {
       routing: RoutingMetadata(
         replyToGUID: replyToGUID,
         threadOriginatorGUID: threadOriginatorGUID,
+        threadOriginatorPart: threadOriginatorPart,
         destinationCallerID: destinationCallerID,
         replyToText: replyToText,
         replyToSender: replyToSender
@@ -401,7 +414,8 @@ public struct Message: Sendable, Equatable {
         reactionType: reactionType,
         isReactionAdd: isReactionAdd,
         reactedToGUID: reactedToGUID
-      )
+      ),
+      poll: poll
     )
   }
 }

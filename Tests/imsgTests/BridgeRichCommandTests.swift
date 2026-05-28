@@ -87,3 +87,117 @@ func sendRichTextOnlyStillUsesMessageBridge() async throws {
   #expect(capturedParams["selectedMessageGuid"] as? String == "parent-guid")
   #expect(capturedParams["filePath"] == nil)
 }
+
+@Test
+func sendRichJsonResolvesQueuedBridgeGuidBeforeEmitting() async throws {
+  let values = ParsedValues(
+    positional: [],
+    options: [
+      "chat": ["iMessage;+;chat123"],
+      "text": ["root card"],
+    ],
+    flags: ["jsonOutput"]
+  )
+  let runtime = RuntimeOptions(parsedValues: values)
+  let store = try CommandTestDatabase.makeStoreForRPC()
+
+  let (output, _) = try await StdoutCapture.capture {
+    try await SendRichCommand.run(
+      values: values,
+      runtime: runtime,
+      invokeBridge: { _, _ in
+        ["messageGuid": "stale-guid", "queued": true]
+      },
+      resolveSentMessage: { _, options, chatID, _ in
+        #expect(options.text == "root card")
+        #expect(chatID == 1)
+        return Message(
+          rowID: 42,
+          chatID: 1,
+          sender: "",
+          text: "root card",
+          date: Date(),
+          isFromMe: true,
+          service: "iMessage",
+          handleID: nil,
+          attachmentsCount: 0,
+          guid: "actual-guid"
+        )
+      },
+      storeFactory: { _ in store }
+    )
+  }
+
+  let data = output.data(using: .utf8) ?? Data()
+  let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  #expect(object["messageGuid"] as? String == "actual-guid")
+  #expect(object["guid"] as? String == "actual-guid")
+  #expect(object["message_id"] as? String == "actual-guid")
+  #expect(object["id"] as? Int == 42)
+}
+
+@Test
+func pollCommandSendInvokesPollBridge() async throws {
+  let values = ParsedValues(
+    positional: ["send"],
+    options: [
+      "chat": ["iMessage;-;+15551234567"],
+      "question": ["Dinner?"],
+      "replyTo": ["parent-guid"],
+      "option": ["Pizza", "Sushi"],
+    ],
+    flags: []
+  )
+  let runtime = RuntimeOptions(parsedValues: values)
+  var capturedAction: BridgeAction?
+  var capturedParams: [String: Any] = [:]
+
+  let (output, _) = try await StdoutCapture.capture {
+    try await PollCommand.run(
+      values: values,
+      runtime: runtime,
+      invokeBridge: { action, params in
+        capturedAction = action
+        capturedParams = params
+        return ["messageGuid": "poll-guid"]
+      }
+    )
+  }
+
+  #expect(capturedAction == .sendPoll)
+  #expect(capturedParams["chatGuid"] as? String == "iMessage;-;+15551234567")
+  #expect(capturedParams["question"] as? String == "Dinner?")
+  #expect(capturedParams["options"] as? [String] == ["Pizza", "Sushi"])
+  #expect(capturedParams["selectedMessageGuid"] as? String == "parent-guid")
+  #expect(output.contains("poll: sent (guid=poll-guid)"))
+}
+
+@Test
+func pollCommandSendResolvesChatID() async throws {
+  let values = ParsedValues(
+    positional: ["send"],
+    options: [
+      "chatID": ["1"],
+      "question": ["Dinner?"],
+      "option": ["Pizza", "Sushi"],
+    ],
+    flags: []
+  )
+  let runtime = RuntimeOptions(parsedValues: values)
+  let store = try CommandTestDatabase.makeStoreForRPC()
+  var capturedParams: [String: Any] = [:]
+
+  _ = try await StdoutCapture.capture {
+    try await PollCommand.run(
+      values: values,
+      runtime: runtime,
+      storeFactory: { _ in store },
+      invokeBridge: { _, params in
+        capturedParams = params
+        return ["messageGuid": "poll-guid"]
+      }
+    )
+  }
+
+  #expect(capturedParams["chatGuid"] as? String == "iMessage;+;chat123")
+}

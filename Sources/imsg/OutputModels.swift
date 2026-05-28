@@ -59,6 +59,7 @@ struct MessagePayload: Codable {
   let guid: String
   let replyToGUID: String?
   let threadOriginatorGUID: String?
+  let threadOriginatorPart: String?
   /// Text of the message this one replies to, when the inbound message is a
   /// Threader reply or a non-reaction association and the parent row is
   /// resolvable in chat.db.
@@ -76,6 +77,7 @@ struct MessagePayload: Codable {
   /// this can help distinguish between messages actually sent by the local user vs
   /// messages received on a secondary phone number registered with the same Apple ID.
   let destinationCallerID: String?
+  let poll: MessagePollEvent?
 
   // Reaction event metadata (populated when this message is a reaction event)
   let isReaction: Bool?
@@ -96,6 +98,7 @@ struct MessagePayload: Codable {
     self.guid = message.guid
     self.replyToGUID = message.replyToGUID
     self.threadOriginatorGUID = message.threadOriginatorGUID
+    self.threadOriginatorPart = message.threadOriginatorPart
     self.replyToText = message.replyToText
     self.replyToSender = message.replyToSender
     self.sender = message.sender
@@ -108,6 +111,7 @@ struct MessagePayload: Codable {
       ReactionPayload(reaction: $0, senderName: reactionSenderNames[$0.rowID])
     }
     self.destinationCallerID = message.destinationCallerID
+    self.poll = message.poll
 
     // Reaction event metadata
     if message.isReaction {
@@ -131,6 +135,7 @@ struct MessagePayload: Codable {
     case guid
     case replyToGUID = "reply_to_guid"
     case threadOriginatorGUID = "thread_originator_guid"
+    case threadOriginatorPart = "thread_originator_part"
     case replyToText = "reply_to_text"
     case replyToSender = "reply_to_sender"
     case sender
@@ -141,6 +146,7 @@ struct MessagePayload: Codable {
     case attachments
     case reactions
     case destinationCallerID = "destination_caller_id"
+    case poll
     case isReaction = "is_reaction"
     case reactionType = "reaction_type"
     case reactionEmoji = "reaction_emoji"

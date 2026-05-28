@@ -115,13 +115,14 @@ enum SendCommand {
     let sentAt = Date()
     try sendMessage(options)
 
+    var sentMessage: Message?
     if input.hasChatTarget {
       let verificationChatID =
         input.chatID
         ?? resolvedTarget.preferredIdentifier.flatMap {
           try? store.chatInfo(matchingTarget: $0)?.id
         }
-      let sentMessage = try? await resolveSentMessage(store, options, verificationChatID, sentAt)
+      sentMessage = try? await resolveSentMessage(store, options, verificationChatID, sentAt)
       if sentMessage == nil {
         try SentMessageVerifier.throwIfMisroutedChatSend(
           store: store,
@@ -132,7 +133,15 @@ enum SendCommand {
     }
 
     if runtime.jsonOutput {
-      try StdoutWriter.writeJSONLine(["status": "sent"])
+      var payload: [String: Any] = ["status": "sent"]
+      if let sentMessage {
+        payload["id"] = sentMessage.rowID
+        if !sentMessage.guid.isEmpty {
+          payload["guid"] = sentMessage.guid
+          payload["message_id"] = sentMessage.guid
+        }
+      }
+      try JSONLines.printObject(payload)
     } else {
       StdoutWriter.writeLine("sent")
     }

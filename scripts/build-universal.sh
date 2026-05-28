@@ -34,6 +34,7 @@ done
 clang -dynamiclib "${HELPER_CLANG_ARCH_ARGS[@]}" -fobjc-arc \
   -Wno-arc-performSelector-leaks \
   -framework Foundation \
+  -framework AppKit \
   -o "${DIST_DIR}/${HELPER_NAME}" \
   "${ROOT}/Sources/IMsgHelper/IMsgInjected.m"
 

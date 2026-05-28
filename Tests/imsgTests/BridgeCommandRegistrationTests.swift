@@ -13,7 +13,7 @@ func commandRouterIncludesAllBridgeCommands() {
   let router = CommandRouter()
   let expected: [String] = [
     "send-rich", "send-multipart", "send-attachment", "tapback",
-    "edit", "unsend", "delete-message", "notify-anyways",
+    "poll", "edit", "unsend", "delete-message", "notify-anyways",
     "chat-create", "chat-name", "chat-photo",
     "chat-add-member", "chat-remove-member",
     "chat-leave", "chat-delete", "chat-mark",
@@ -35,6 +35,7 @@ func bridgeMessagingCommandsExposeChatRequirement() async {
   let router = CommandRouter()
   let cases: [(name: String, args: [String])] = [
     ("send-rich", ["--text", "hello"]),
+    ("poll", ["send", "--question", "Dinner?", "--option", "A", "--option", "B"]),
     ("edit", ["--message", "message-guid", "--new-text", "updated"]),
     ("unsend", ["--message", "message-guid"]),
     ("delete-message", ["--message", "message-guid"]),
@@ -81,6 +82,70 @@ func bridgeAttachmentStagingUsesChatGuid() throws {
   #expect(prepareBody.contains("[inv setArgument:&cg atIndex:5];"))
   #expect(
     sendAttachmentBody.contains("prepareOutgoingTransfer(fileURL, filename, chatGuid, &prepErr)"))
+}
+
+@Test
+func bridgeReplySendsKeepAssociatedMessageFallback() throws {
+  let testFile = URL(fileURLWithPath: #filePath)
+  let repoRoot =
+    testFile
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let helper = repoRoot.appendingPathComponent("Sources/IMsgHelper/IMsgInjected.m")
+  let source = stripObjectiveCComments(try String(contentsOf: helper, encoding: .utf8))
+
+  for function in ["handleSendMessage", "handleSendMultipart", "handleSendAttachment"] {
+    let body = try #require(functionBody(named: function, in: source))
+    #expect(body.contains("selectedMessageGuid.length ? 100 : 0"))
+    #expect(body.contains("selectedMessageGuid"))
+    #expect(body.contains("associatedType"))
+  }
+}
+
+@Test
+func injectedHelperWiresNativePollSend() throws {
+  let testFile = URL(fileURLWithPath: #filePath)
+  let repoRoot =
+    testFile
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let helper = repoRoot.appendingPathComponent("Sources/IMsgHelper/IMsgInjected.m")
+  let source = stripObjectiveCComments(try String(contentsOf: helper, encoding: .utf8))
+  let sendPollBody = try #require(functionBody(named: "handleSendPoll", in: source))
+
+  #expect(source.contains("send-poll"))
+  #expect(source.contains("com.apple.messages.Polls"))
+  #expect(source.contains("MSMessageTemplateLayout"))
+  #expect(source.contains("MSMessageLiveLayout"))
+  #expect(source.contains(#""liveLayoutInfo""#))
+  #expect(source.contains(#""ai""#))
+  #expect(source.contains(#""sendAsText": @YES"#))
+  #expect(source.contains(#""supports-polls""#))
+  #expect(source.contains("__kIMBreadcrumbTextMarkerAttributeName"))
+  #expect(source.contains("pollPreviewImageData"))
+  #expect(sendPollBody.contains("buildPollCreationPayloadData"))
+  #expect(sendPollBody.contains("buildPollIMMessage"))
+  #expect(!sendPollBody.contains(#"selectedMessageGuid.length ? @"" : question"#))
+  #expect(sendPollBody.contains("buildPollCreationPayloadData(question,"))
+  #expect(sendPollBody.contains(#"@{ @"enc": @YES, @"ust": @YES }"#))
+  #expect(sendPollBody.contains("selectedMessageGuid"))
+  #expect(sendPollBody.contains("deriveThreadIdentifier"))
+  #expect(sendPollBody.contains("setThreadOriginator:"))
+  #expect(sendPollBody.contains("parentMessage"))
+  #expect(sendPollBody.contains("parentItem"))
+  #expect(sendPollBody.contains("threadIdentifier"))
+  #expect(!source.contains("threadStrategy"))
+  #expect(!source.contains("debug-runtime-search"))
+  #expect(
+    sendPollBody.contains(
+      "dispatchIMMessageInChat(chat, imMessage, threadIdentifier, parentItem)"
+    ))
+  #expect(
+    source.contains(
+      "initWithSender:time:text:messageSubject:fileTransferGUIDs:flags:error:guid:subject:balloonBundleID:payloadData:expressiveSendStyleID:threadIdentifier:scheduleType:scheduleState:messageSummaryInfo:"
+    ))
 }
 
 private func stripObjectiveCComments(_ source: String) -> String {

@@ -244,6 +244,7 @@ extension RPCServer {
         var result: [String: Any] = ["ok": true, "transport": "bridge"]
         if let guid = data["messageGuid"] as? String, !guid.isEmpty {
           result["guid"] = guid
+          result["message_id"] = guid
         }
         if let chatGuid = data["chatGuid"] as? String, !chatGuid.isEmpty {
           result["chat_guid"] = chatGuid
@@ -285,6 +286,7 @@ extension RPCServer {
       result["id"] = sentMessage.rowID
       if !sentMessage.guid.isEmpty {
         result["guid"] = sentMessage.guid
+        result["message_id"] = sentMessage.guid
       }
     }
     var responseChatInfo: ChatInfo?

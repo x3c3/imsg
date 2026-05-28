@@ -36,6 +36,7 @@ func schemaDetectsOptionalMessageColumns() throws {
       includeAttributedBody: true,
       includeReactionColumns: true,
       includeThreadOriginatorGUID: true,
+      includeThreadOriginatorPart: true,
       includeDestinationCallerID: true,
       includeAudioMessage: true,
       includeBalloonBundleID: true,
@@ -49,6 +50,7 @@ func schemaDetectsOptionalMessageColumns() throws {
   #expect(store.schema.hasAttributedBody)
   #expect(store.schema.hasReactionColumns)
   #expect(store.schema.hasThreadOriginatorGUIDColumn)
+  #expect(store.schema.hasThreadOriginatorPartColumn)
   #expect(store.schema.hasDestinationCallerID)
   #expect(store.schema.hasAudioMessageColumn)
   #expect(store.schema.hasBalloonBundleIDColumn)

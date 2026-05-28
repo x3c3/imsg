@@ -367,6 +367,45 @@ func sendCommandResolvesChatID() async throws {
 }
 
 @Test
+func sendCommandJsonIncludesResolvedMessageGuidForChatTarget() async throws {
+  let path = try CommandTestDatabase.makePath()
+  let values = ParsedValues(
+    positional: [],
+    options: ["db": [path], "chatID": ["1"], "text": ["thread root"]],
+    flags: ["jsonOutput"]
+  )
+  let runtime = RuntimeOptions(parsedValues: values)
+
+  let output = try await StdoutCapture.capture {
+    try await SendCommand.run(
+      values: values,
+      runtime: runtime,
+      sendMessage: { _ in },
+      resolveSentMessage: { _, options, chatID, _ in
+        Message(
+          rowID: 42,
+          chatID: chatID ?? 0,
+          sender: "me@icloud.com",
+          text: options.text,
+          date: Date(),
+          isFromMe: true,
+          service: "iMessage",
+          handleID: nil,
+          attachmentsCount: 0,
+          guid: "root-guid"
+        )
+      }
+    )
+  }
+
+  let object = try jsonObject(from: output.output)
+  #expect(object["status"] as? String == "sent")
+  #expect((object["id"] as? NSNumber)?.int64Value == 42)
+  #expect(object["guid"] as? String == "root-guid")
+  #expect(object["message_id"] as? String == "root-guid")
+}
+
+@Test
 func sendCommandRejectsMisroutedChatGhost() async throws {
   let path = try CommandTestDatabase.makePath()
   let values = ParsedValues(

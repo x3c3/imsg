@@ -130,6 +130,62 @@ enum CommandTestDatabase {
     return try MessageStore(connection: db, path: ":memory:")
   }
 
+  static func makeStoreForRPCWithPollVote() throws -> MessageStore {
+    let db = try Connection(.inMemory)
+    try createSchema(
+      db,
+      includeChatHandleJoin: true,
+      includeReactionColumns: true,
+      includePollColumns: true
+    )
+    try seedRPCChat(db)
+    let now = Date()
+    let creationPayload = try pollPayload(
+      jsonObject: [
+        "title": "Ship it?",
+        "orderedPollOptions": [
+          ["optionIdentifier": "choice-yes", "pollOptionText": "Yes"],
+          ["optionIdentifier": "choice-no", "pollOptionText": "No"],
+        ],
+      ])
+    let votePayload = try pollPayload(
+      jsonObject: [
+        "votes": [
+          [
+            "voteOptionIdentifier": "choice-yes",
+            "participantHandle": "+123",
+            "eventType": "selected",
+          ]
+        ]
+      ])
+    try db.run(
+      """
+      INSERT INTO message(
+        ROWID, handle_id, text, guid, associated_message_guid, associated_message_type,
+        balloon_bundle_id, payload_data, message_summary_info, date, is_from_me, service
+      )
+      VALUES (6, 2, '', 'poll-guid-6', NULL, NULL, ?, ?, NULL, ?, 1, 'iMessage')
+      """,
+      "com.apple.messages.MSMessageExtensionBalloonPlugin:0000000000:com.apple.messages.Polls",
+      Blob(bytes: [UInt8](creationPayload)),
+      appleEpoch(now.addingTimeInterval(1))
+    )
+    try db.run(
+      """
+      INSERT INTO message(
+        ROWID, handle_id, text, guid, associated_message_guid, associated_message_type,
+        balloon_bundle_id, payload_data, message_summary_info, date, is_from_me, service
+      )
+      VALUES (7, 1, '', 'poll-vote-guid-7', 'p:0/poll-guid-6', 4000, NULL, ?, NULL, ?, 0, 'iMessage')
+      """,
+      Blob(bytes: [UInt8](votePayload)),
+      appleEpoch(now.addingTimeInterval(2))
+    )
+    try db.run("INSERT INTO chat_message_join(chat_id, message_id) VALUES (1, 6)")
+    try db.run("INSERT INTO chat_message_join(chat_id, message_id) VALUES (1, 7)")
+    return try MessageStore(connection: db, path: ":memory:")
+  }
+
   private static func makeDatabasePath() throws -> String {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -139,7 +195,8 @@ enum CommandTestDatabase {
   private static func createSchema(
     _ db: Connection,
     includeChatHandleJoin: Bool,
-    includeReactionColumns: Bool = false
+    includeReactionColumns: Bool = false,
+    includePollColumns: Bool = false
   ) throws {
     let reactionColumns =
       includeReactionColumns
@@ -149,6 +206,14 @@ enum CommandTestDatabase {
         "associated_message_type INTEGER",
       ].joined(separator: ",\n") + ","
       : ""
+    let pollColumns =
+      includePollColumns
+      ? [
+        "balloon_bundle_id TEXT",
+        "payload_data BLOB",
+        "message_summary_info BLOB",
+      ].joined(separator: ",\n") + ","
+      : ""
     try db.execute(
       """
       CREATE TABLE message (
@@ -156,6 +221,7 @@ enum CommandTestDatabase {
         handle_id INTEGER,
         text TEXT,
         \(reactionColumns)
+        \(pollColumns)
         date INTEGER,
         is_from_me INTEGER,
         service TEXT
@@ -248,5 +314,19 @@ enum CommandTestDatabase {
       appleEpoch(now)
     )
     try db.run("INSERT INTO chat_message_join(chat_id, message_id) VALUES (1, 5)")
+  }
+
+  private static func pollPayload(jsonObject: [String: Any]) throws -> Data {
+    let json = try JSONSerialization.data(withJSONObject: jsonObject, options: [.sortedKeys])
+    let encoded = json.base64EncodedString()
+    let url = URL(string: "data:,\(encoded)")!
+    return try NSKeyedArchiver.archivedData(
+      withRootObject: [
+        "URL": url,
+        "sessionIdentifier": UUID(),
+        "an": "Polls",
+      ],
+      requiringSecureCoding: false
+    )
   }
 }

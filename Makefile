@@ -41,6 +41,7 @@ build-dylib:
 	@clang -dynamiclib -arch arm64e -fobjc-arc \
 		-Wno-arc-performSelector-leaks \
 		-framework Foundation \
+		-framework AppKit \
 		-o .build/release/imsg-bridge-helper.dylib \
 		Sources/IMsgHelper/IMsgInjected.m
 	@echo "Built .build/release/imsg-bridge-helper.dylib"

@@ -139,6 +139,14 @@ enum SendRichCommand {
       action, params in
       try await IMsgBridgeClient.shared.invoke(action: action, params: params)
     },
+    resolveSentMessage:
+      @escaping (
+        MessageStore,
+        MessageSendOptions,
+        Int64?,
+        Date
+      ) async throws -> Message? = SentMessageVerifier.resolveSentMessage,
+    storeFactory: @escaping (String) throws -> MessageStore = { try MessageStore(path: $0) },
     stageAttachment: @escaping (String) throws -> String = MessageSender
       .stageAttachmentForMessagesApp
   ) async throws {
@@ -198,12 +206,74 @@ enum SendRichCommand {
       return
     }
 
-    _ = try await BridgeOutput.invokeAndEmit(
-      action: .sendMessage, params: params, runtime: runtime, invokeBridge: invokeBridge
-    ) { data in
-      let guid = (data["messageGuid"] as? String) ?? ""
-      return guid.isEmpty ? "send-rich: queued" : "send-rich: sent (guid=\(guid))"
+    do {
+      let sentAt = Date()
+      let data = try await invokeBridge(.sendMessage, params)
+      let enriched = try await enrichedSentMessageResponse(
+        data,
+        chat: chat,
+        text: text,
+        dbPath: values.option("db") ?? MessageStore.defaultPath,
+        sentAt: sentAt,
+        resolveSentMessage: resolveSentMessage,
+        storeFactory: storeFactory
+      )
+      let guid = (enriched["messageGuid"] as? String) ?? ""
+      let summary = guid.isEmpty ? "send-rich: queued" : "send-rich: sent (guid=\(guid))"
+      BridgeOutput.emit(enriched, runtime: runtime, summary: summary)
+    } catch {
+      BridgeOutput.emitError(String(describing: error), runtime: runtime)
+      throw BridgeOutput.EmittedError()
     }
+  }
+
+  private static func enrichedSentMessageResponse(
+    _ data: [String: Any],
+    chat: String,
+    text: String,
+    dbPath: String,
+    sentAt: Date,
+    resolveSentMessage:
+      @escaping (
+        MessageStore,
+        MessageSendOptions,
+        Int64?,
+        Date
+      ) async throws -> Message?,
+    storeFactory: (String) throws -> MessageStore
+  ) async throws -> [String: Any] {
+    var enriched = data
+    guard !text.isEmpty, data["queued"] as? Bool == true else {
+      return enriched
+    }
+
+    do {
+      let store = try storeFactory(dbPath)
+      let chatInfo = try store.chatInfo(matchingTarget: chat)
+      let resolvedChatGUID = chatInfo?.guid ?? ""
+      let options = MessageSendOptions(
+        recipient: "",
+        text: text,
+        service: .auto,
+        chatIdentifier: chatInfo?.identifier ?? "",
+        chatGUID: resolvedChatGUID.isEmpty ? chat : resolvedChatGUID
+      )
+      if let sentMessage = try await resolveSentMessage(store, options, chatInfo?.id, sentAt) {
+        enriched["id"] = sentMessage.rowID
+        if !sentMessage.guid.isEmpty {
+          enriched["guid"] = sentMessage.guid
+          enriched["message_id"] = sentMessage.guid
+          enriched["messageGuid"] = sentMessage.guid
+        }
+      } else if data["queued"] as? Bool == true {
+        enriched.removeValue(forKey: "messageGuid")
+      }
+    } catch {
+      if data["queued"] as? Bool == true {
+        enriched.removeValue(forKey: "messageGuid")
+      }
+    }
+    return enriched
   }
 }
 

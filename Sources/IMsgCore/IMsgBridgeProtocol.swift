@@ -50,6 +50,7 @@ public enum BridgeAction: String, Sendable, CaseIterable {
   case sendMessage = "send-message"
   case sendMultipart = "send-multipart"
   case sendAttachment = "send-attachment"
+  case sendPoll = "send-poll"
   case sendReaction = "send-reaction"
   case notifyAnyways = "notify-anyways"
 

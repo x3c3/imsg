@@ -127,6 +127,7 @@ Advanced IMCore (require `imsg launch` with SIP off — see
 - `imsg send-rich [--reply-to <guid>] [--file <path>]`,
   `imsg send-multipart`, `imsg send-attachment [--reply-to <guid>]`,
   `imsg tapback`
+- `imsg poll send (--chat <guid> | --chat-id <id>) --question <text> --option <text> --option <text> [--reply-to <guid>]`
 - `imsg edit`, `imsg unsend`, `imsg delete-message`, `imsg notify-anyways`
 - `imsg chat-create`, `imsg chat-name`, `imsg chat-photo`,
   `imsg chat-add-member`, `imsg chat-remove-member`, `imsg chat-leave`,
@@ -159,6 +160,7 @@ Message objects include:
   chat.db)
 - `sender`, `sender_name`, `is_from_me`, `text`, `created_at`
 - `attachments`, `reactions`
+- `poll` for native Apple Messages poll creation and vote rows
 
 When `watch --reactions --json` sees a tapback event, the message object also
 includes `is_reaction`, `reaction_type`, `reaction_emoji`, `is_reaction_add`,
@@ -176,9 +178,9 @@ It is intended for agents and long-running integrations that want a single
 process for chats, history, send, and watch.
 
 Read methods: `chats.list`, `messages.history`, `watch.subscribe`,
-`watch.unsubscribe`, `message.send_status`. Mutating: `send`. Bridge
-introspection: `handles.check`. See [docs/rpc.md](docs/rpc.md) for request
-and response shapes.
+`watch.unsubscribe`, `message.send_status`. Mutating: `send`, `poll.send`.
+Bridge introspection: `handles.check`. See [docs/rpc.md](docs/rpc.md) for
+request and response shapes.
 
 ## Attachments
 

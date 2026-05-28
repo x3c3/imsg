@@ -66,11 +66,7 @@ struct MessagesAfterQuery {
     limit: Int,
     includeReactions: Bool
   ) {
-    self.selection = MessageRowSelection(
-      store: store,
-      includeChatID: true,
-      includeBalloonBundleID: true
-    )
+    self.selection = MessageRowSelection(store: store, includeChatID: true)
     let reactionFilter: String
     if includeReactions || !store.schema.hasReactionColumns {
       reactionFilter = ""

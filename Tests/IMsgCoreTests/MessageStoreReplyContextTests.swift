@@ -6,6 +6,7 @@ import Testing
 
 /// Schema helper for reply-parent enrichment tests. Mirrors the
 /// reaction-test fixture but includes the optional `thread_originator_guid`
+/// / `thread_originator_part`
 /// column so we can exercise both the Threader-reply path and the
 /// non-reaction `associated_message_guid` path.
 private enum ReplyContextTestDatabase {
@@ -25,7 +26,9 @@ private enum ReplyContextTestDatabase {
         guid TEXT,
         associated_message_guid TEXT,
         associated_message_type INTEGER,
+        reply_to_guid TEXT,
         thread_originator_guid TEXT,
+        thread_originator_part TEXT,
         date INTEGER,
         is_from_me INTEGER,
         service TEXT
@@ -50,7 +53,9 @@ private enum ReplyContextTestDatabase {
     isFromMe: Bool = false,
     associatedGuid: String? = nil,
     associatedType: Int? = nil,
+    replyToGuid: String? = nil,
     threadOriginatorGuid: String? = nil,
+    threadOriginatorPart: String? = nil,
     chatID: Int64 = 1
   ) throws {
     let bindings: [Binding?] = [
@@ -60,7 +65,9 @@ private enum ReplyContextTestDatabase {
       guid,
       associatedGuid,
       associatedType.map { Int64($0) },
+      replyToGuid,
       threadOriginatorGuid,
+      threadOriginatorPart,
       appleEpoch(date),
       isFromMe ? Int64(1) : Int64(0),
     ]
@@ -68,10 +75,11 @@ private enum ReplyContextTestDatabase {
       """
       INSERT INTO message(
         ROWID, handle_id, text, guid,
-        associated_message_guid, associated_message_type, thread_originator_guid,
+        associated_message_guid, associated_message_type, reply_to_guid, thread_originator_guid,
+        thread_originator_part,
         date, is_from_me, service
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'iMessage')
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'iMessage')
       """,
       bindings
     )
@@ -99,7 +107,8 @@ func messagesEnrichesThreaderReplyParent() throws {
     text: "Calendar",
     guid: "reply-guid",
     date: now,
-    threadOriginatorGuid: "parent-guid"
+    threadOriginatorGuid: "parent-guid",
+    threadOriginatorPart: "0:0:47"
   )
 
   let store = try MessageStore(connection: db, path: ":memory:")
@@ -107,6 +116,7 @@ func messagesEnrichesThreaderReplyParent() throws {
   let reply = try #require(messages.first { $0.rowID == 2 })
 
   #expect(reply.threadOriginatorGUID == "parent-guid")
+  #expect(reply.threadOriginatorPart == "0:0:47")
   #expect(reply.replyToText == "Should I lead with calendar, family, or email?")
   #expect(reply.replyToSender == "+123")
 }
@@ -141,6 +151,37 @@ func messagesAfterEnrichesAssociatedReplyParent() throws {
 
   #expect(reply.replyToGUID == "parent-guid")
   #expect(reply.replyToText == "Original photo caption")
+  #expect(reply.replyToSender == "+123")
+}
+
+@Test
+func messagesAfterEnrichesDatabaseReplyToParent() throws {
+  let db = try ReplyContextTestDatabase.makeConnection()
+  let now = Date()
+  try ReplyContextTestDatabase.insertMessage(
+    db,
+    rowID: 1,
+    handleID: 1,
+    text: "Approve the task?",
+    guid: "parent-guid",
+    date: now.addingTimeInterval(-60)
+  )
+  try ReplyContextTestDatabase.insertMessage(
+    db,
+    rowID: 2,
+    handleID: 2,
+    text: "Native poll",
+    guid: "poll-reply-guid",
+    date: now,
+    replyToGuid: "p:0/parent-guid"
+  )
+
+  let store = try MessageStore(connection: db, path: ":memory:")
+  let messages = try store.messagesAfter(afterRowID: 0, chatID: 1, limit: 10)
+  let reply = try #require(messages.first { $0.rowID == 2 })
+
+  #expect(reply.replyToGUID == "parent-guid")
+  #expect(reply.replyToText == "Approve the task?")
   #expect(reply.replyToSender == "+123")
 }
 
@@ -210,7 +251,9 @@ func reactionsDoNotProduceReplyContext() throws {
     date: now,
     associatedGuid: "p:0/parent-guid",
     associatedType: 2000,
-    threadOriginatorGuid: "parent-guid"
+    replyToGuid: "parent-guid",
+    threadOriginatorGuid: "parent-guid",
+    threadOriginatorPart: "0:0:16"
   )
 
   let store = try MessageStore(connection: db, path: ":memory:")
@@ -221,6 +264,7 @@ func reactionsDoNotProduceReplyContext() throws {
   #expect(reaction.isReaction)
   #expect(reaction.replyToGUID == nil)
   #expect(reaction.threadOriginatorGUID == nil)
+  #expect(reaction.threadOriginatorPart == nil)
   #expect(reaction.replyToText == nil)
   #expect(reaction.replyToSender == nil)
 }

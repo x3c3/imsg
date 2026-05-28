@@ -256,6 +256,7 @@ func rpcSendReturnsSentMessageIdentifiersWhenResolved() async throws {
   #expect(result?["guid"] as? String == "8DF1B3D7")
   #expect(result?["chat_guid"] as? String == "iMessage;+;chat123")
   #expect(result?["service"] as? String == "iMessage")
+  #expect(result?["message_id"] as? String == "8DF1B3D7")
 }
 
 @Test
@@ -532,6 +533,33 @@ func rpcWatchIncludeReactionsDoesNotRequireAttachments() async throws {
   #expect(reactions.count == 1)
   #expect(reactions.first?["type"] as? String == "like")
   #expect((message?["attachments"] as? [[String: Any]])?.isEmpty == true)
+}
+
+@Test
+func rpcWatchEmitsPollVotesWithoutReactionEventsEnabled() async throws {
+  let store = try CommandTestDatabase.makeStoreForRPCWithPollVote()
+  let output = TestRPCOutput()
+  let server = RPCServer(store: store, verbose: false, output: output)
+
+  let subscribe =
+    #"{"jsonrpc":"2.0","id":14,"method":"watch.subscribe","params":{"chat_id":1,"since_rowid":6}}"#
+  await server.handleLineForTesting(subscribe)
+
+  for _ in 0..<20 {
+    if output.notifications.count >= 1 { break }
+    try await Task.sleep(nanoseconds: 50_000_000)
+  }
+
+  let params = output.notifications.first?["params"] as? [String: Any]
+  let message = params?["message"] as? [String: Any]
+  let poll = message?["poll"] as? [String: Any]
+  let vote = poll?["vote"] as? [String: Any]
+  #expect(poll?["event"] as? String == "imessage.poll.voted")
+  #expect(poll?["kind"] as? String == "vote")
+  #expect(vote?["option_id"] as? String == "choice-yes")
+  #expect(vote?["option_text"] as? String == "Yes")
+  #expect(vote?["participant"] as? String == "+123")
+  #expect(poll?["original_guid"] as? String == "poll-guid-6")
 }
 
 @Test

@@ -6,6 +6,7 @@
 - fix: return chat GUID, message GUID, and service identity from JSON-RPC send/create responses when observable (#119, thanks @svetly).
 - feat: expose `handles.check` for bridge-backed iMessage handle availability checks (#120, thanks @svetly).
 - feat: expose `message.send_status` to query outbound message delivery state by GUID (#121, thanks @svetly).
+- feat: add native Apple Messages poll decoding and bridge-backed `imsg poll send` / `poll.send` support, including threaded poll replies and vote readback (#125, thanks @veteranbv).
 
 ## 0.9.0 - 2026-05-16
 
