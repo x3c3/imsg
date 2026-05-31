@@ -2,6 +2,40 @@ import Foundation
 import SQLite
 
 extension MessageStore {
+  public func chatInfo(matchingExactTarget target: String) throws -> ChatInfo? {
+    let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    let accountIDColumn = schema.hasChatAccountIDColumn ? "IFNULL(c.account_id, '')" : "''"
+    let accountLoginColumn = schema.hasChatAccountLoginColumn ? "IFNULL(c.account_login, '')" : "''"
+    let lastAddressedHandleColumn =
+      schema.hasChatLastAddressedHandleColumn ? "IFNULL(c.last_addressed_handle, '')" : "''"
+    let sql = """
+      SELECT c.ROWID AS chat_rowid, IFNULL(c.chat_identifier, '') AS identifier, IFNULL(c.guid, '') AS guid,
+             IFNULL(c.display_name, c.chat_identifier) AS name, IFNULL(c.service_name, '') AS service,
+             \(accountIDColumn) AS account_id,
+             \(accountLoginColumn) AS account_login,
+             \(lastAddressedHandleColumn) AS last_addressed_handle
+      FROM chat c
+      WHERE c.chat_identifier = ? OR c.guid = ?
+      LIMIT 1
+      """
+    return try withConnection { db in
+      let rows = try db.prepareRowIterator(sql, bindings: [trimmed, trimmed])
+      guard let row = try rows.failableNext() else { return nil }
+      return ChatInfo(
+        id: try int64Value(row, "chat_rowid") ?? 0,
+        identifier: try stringValue(row, "identifier"),
+        guid: try stringValue(row, "guid"),
+        name: try stringValue(row, "name"),
+        service: try stringValue(row, "service"),
+        accountID: try stringValue(row, "account_id").nilIfEmpty,
+        accountLogin: try stringValue(row, "account_login").nilIfEmpty,
+        lastAddressedHandle: try stringValue(row, "last_addressed_handle").nilIfEmpty
+      )
+    }
+  }
+
   public func chatInfo(matchingTarget target: String) throws -> ChatInfo? {
     let candidates = Self.chatTargetCandidates(target)
     guard !candidates.isEmpty else { return nil }

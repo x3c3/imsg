@@ -215,18 +215,41 @@ extension RPCServer {
     if input.hasChatTarget && resolvedTarget.preferredIdentifier == nil {
       throw RPCError.invalidParams("missing chat identifier or guid")
     }
+    var effectiveService = service
+    if service == .auto && !input.hasChatTarget && !input.recipient.isEmpty {
+      switch (try? store.preferredService(forHandle: input.recipient, region: region)) ?? .unknown {
+      case .imessage, .unknown:
+        effectiveService = .auto
+      case .sms:
+        effectiveService = .sms
+      }
+    }
+
     let directChatInfo =
       input.hasChatTarget
-      ? nil : try resolveDirectChatInfo(recipient: input.recipient, service: service)
+      ? nil
+      : try resolveDirectChatInfo(
+        recipient: input.recipient,
+        service: effectiveService,
+        includeAnyForSMS: service == .auto && effectiveService == .sms
+      )
+
+    let allowSMSFallback =
+      service == .auto
+      && !input.hasChatTarget
+      && !input.recipient.isEmpty
+      && !text.isEmpty
+      && file.isEmpty
 
     let options = MessageSendOptions(
       recipient: input.recipient,
       text: text,
       attachmentPath: file,
-      service: service,
+      service: effectiveService,
       region: region,
       chatIdentifier: resolvedTarget.chatIdentifier,
-      chatGUID: resolvedTarget.chatGUID
+      chatGUID: resolvedTarget.chatGUID,
+      allowSMSFallback: allowSMSFallback
     )
     let sentAt = Date()
 
@@ -459,11 +482,25 @@ extension RPCServer {
     respond(id: id, result: ["ok": true])
   }
 
-  private func resolveDirectChatInfo(recipient: String, service: MessageService) throws -> ChatInfo?
-  {
-    for candidate in ChatTargetResolver.directChatCandidates(recipient: recipient, service: service)
-    {
-      if let info = try store.chatInfo(matchingTarget: candidate) {
+  private func resolveDirectChatInfo(
+    recipient: String,
+    service: MessageService,
+    includeAnyForSMS: Bool = false
+  ) throws -> ChatInfo? {
+    let trimmed = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
+    var candidates = ChatTargetResolver.directChatCandidates(recipient: recipient, service: service)
+    let requireExactMatch = includeAnyForSMS
+    if includeAnyForSMS, !trimmed.isEmpty {
+      candidates = ["SMS;-;\(trimmed)", "any;-;\(trimmed)", "any;+;\(trimmed)"]
+    }
+    for candidate in candidates {
+      let info: ChatInfo?
+      if requireExactMatch {
+        info = try store.chatInfo(matchingExactTarget: candidate)
+      } else {
+        info = try store.chatInfo(matchingTarget: candidate)
+      }
+      if let info {
         return info
       }
     }

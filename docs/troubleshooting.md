@@ -51,7 +51,7 @@ Two possible causes:
 
 **Tahoe ghost-row failure (group sends).** On macOS 26, Messages.app sometimes reports AppleScript success while writing an empty unjoined SMS row instead of delivering. `imsg send` for chat-target sends already detects this and reports an error instead of `sent`. If you're still seeing silent failures with `--chat-id`/`--chat-identifier`/`--chat-guid`, make sure you're on `imsg` 0.6.0 or newer (`imsg --version`).
 
-**Service mismatch.** A send to a phone number with `--service imessage` fails fast if the recipient isn't on iMessage. With `--service sms`, Text Message Forwarding must be enabled on your iPhone for this Mac. With `--service auto`, Messages picks; this is the recommended default.
+**Service mismatch.** A send to a phone number with `--service imessage` fails fast if the recipient isn't on iMessage. With `--service sms`, Text Message Forwarding must be enabled on your iPhone for this Mac. With `--service auto`, `imsg` checks local history first; text-only direct phone sends may retry once over SMS unless `--no-sms-fallback` is set.
 
 ## `imsg watch` goes silent after a while
 

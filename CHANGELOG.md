@@ -2,6 +2,12 @@
 
 ## 0.10.1 - Unreleased
 
+### Send
+- feat: add SIP-free local iMessage/SMS service detection for direct `send --service auto`, with text-only iMessage-to-SMS fallback that never overrides explicit `--service` choices (#132, thanks @ranaroussi).
+
+### Local Lookups
+- feat: add `--local` modes for `account`, `whois`, and `nickname` so common introspection can read local history or Contacts without launching the IMCore bridge (#132, thanks @ranaroussi).
+
 ## 0.10.0 - 2026-05-28
 
 ### Watch

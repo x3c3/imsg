@@ -59,13 +59,14 @@ Audio files (`.m4a`, `.caf`, `.aiff`, etc.) send the same way as any other file.
 imsg send --to "+14155551212" --text "hi" --service auto       # default
 imsg send --to "+14155551212" --text "hi" --service imessage
 imsg send --to "+14155551212" --text "hi" --service sms
+imsg send --to "+14155551212" --text "hi" --no-sms-fallback
 ```
 
-- `auto` — Messages picks. iMessage when the recipient is an Apple device; SMS when not, given Text Message Forwarding is enabled.
+- `auto` — `imsg` first checks local Messages history for the handle's observed service. Existing SMS-only phone threads use SMS; known iMessage handles use iMessage; unknown handles try iMessage. For text-only direct phone sends, a failed iMessage attempt retries once over SMS unless `--no-sms-fallback` is set.
 - `imessage` — force iMessage. Fails fast if the recipient isn't on iMessage.
 - `sms` — force SMS relay. Requires Text Message Forwarding enabled on your iPhone for this Mac.
 
-For groups, omit `--service`. Group sends always use the chat's existing service.
+Fallback is intentionally narrow: it does not run for explicit `--service imessage`, `--service sms`, chat-target sends, email recipients, or attachment sends. For groups, omit `--service`. Group sends always use the chat's existing service.
 
 ## Region for phone normalization
 
@@ -73,7 +74,7 @@ For groups, omit `--service`. Group sends always use the chat's existing service
 imsg send --to "415-555-1212" --text "hi" --region US
 ```
 
-Defaults to `US`. Pass an ISO 3166-1 alpha-2 country code to normalize locally-formatted numbers.
+Defaults to `US`. Pass an ISO 3166-1 alpha-2 country code to normalize locally-formatted numbers. `--service auto` uses the same normalized phone number when checking local Messages history, so SMS-only history is detected for local-format numbers outside the US too.
 
 ## Confirming what was sent
 

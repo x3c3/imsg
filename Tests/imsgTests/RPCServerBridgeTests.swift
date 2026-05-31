@@ -41,6 +41,92 @@ func rpcSendUsesBridgeWhenReadyAndExistingDirectChatResolves() async throws {
 }
 
 @Test
+func rpcSendAutoSMSDetectionKeepsAnyPrefixBridgeLookup() async throws {
+  let store = try CommandTestDatabase.makeStoreForRPCDirectChat()
+  try store.withConnection { db in
+    try db.run(
+      """
+      UPDATE chat
+      SET chat_identifier = 'any;-;+123', guid = 'any;-;+123'
+      WHERE ROWID = 1
+      """
+    )
+    try db.run(
+      """
+      INSERT INTO chat(
+        ROWID, chat_identifier, guid, display_name, service_name,
+        account_id, account_login, last_addressed_handle
+      )
+      VALUES (
+        0, '+123', 'iMessage;-;+123', 'Old iMessage Chat', 'iMessage',
+        'iMessage;+;me@icloud.com', 'me@icloud.com', '+123'
+      )
+      """
+    )
+    try db.run("ALTER TABLE handle ADD COLUMN service TEXT")
+    try db.run("UPDATE handle SET service = 'SMS' WHERE id = '+123'")
+  }
+  let output = TestRPCOutput()
+  var appleScriptCalled = false
+  var capturedAction: BridgeAction?
+  var capturedParams: [String: Any] = [:]
+  let server = RPCServer(
+    store: store,
+    verbose: false,
+    output: output,
+    sendMessage: { _ in appleScriptCalled = true },
+    resolveSentMessage: { _, _, _, _ in nil },
+    invokeBridge: { action, params in
+      capturedAction = action
+      capturedParams = params
+      return ["messageGuid": "bridge-guid", "chatGuid": "any;-;+123", "service": "SMS"]
+    },
+    isBridgeReady: { true }
+  )
+
+  let line =
+    #"{"jsonrpc":"2.0","id":"3anysms","method":"send","params":{"to":"+123","text":"yo","transport":"bridge"}}"#
+  await server.handleLineForTesting(line)
+
+  #expect(appleScriptCalled == false)
+  #expect(capturedAction == .sendMessage)
+  #expect(capturedParams["chatGuid"] as? String == "any;-;+123")
+  let result = output.responses.first?["result"] as? [String: Any]
+  #expect(result?["transport"] as? String == "bridge")
+}
+
+@Test
+func rpcSendAutoSMSDetectionDoesNotUseIMessageBridgeChat() async throws {
+  let store = try CommandTestDatabase.makeStoreForRPCDirectChat()
+  try store.withConnection { db in
+    try db.run("ALTER TABLE handle ADD COLUMN service TEXT")
+    try db.run("UPDATE handle SET service = 'SMS' WHERE id = '+123'")
+  }
+  let output = TestRPCOutput()
+  var bridgeCalled = false
+  let server = RPCServer(
+    store: store,
+    verbose: false,
+    output: output,
+    sendMessage: { _ in },
+    resolveSentMessage: { _, _, _, _ in nil },
+    invokeBridge: { _, _ in
+      bridgeCalled = true
+      return [:]
+    },
+    isBridgeReady: { true }
+  )
+
+  let line =
+    #"{"jsonrpc":"2.0","id":"3imsms","method":"send","params":{"to":"+123","text":"yo","transport":"bridge"}}"#
+  await server.handleLineForTesting(line)
+
+  #expect(bridgeCalled == false)
+  let error = output.errors.first?["error"] as? [String: Any]
+  #expect(error?["data"] as? String == "bridge transport requires an existing chat target")
+}
+
+@Test
 func rpcSendFallsBackToAppleScriptWhenAutoBridgeFails() async throws {
   let store = try CommandTestDatabase.makeStoreForRPCDirectChat()
   let output = TestRPCOutput()

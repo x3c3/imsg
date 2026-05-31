@@ -113,7 +113,7 @@ Automation):
 - `imsg history --chat-id <id> [--limit 50] [--attachments] [--convert-attachments] [--participants <handles>] [--start <iso>] [--end <iso>] [--json]`
 - `imsg watch [--chat-id <id>] [--since-rowid <id>] [--debounce <duration>] [--attachments] [--convert-attachments] [--reactions] [--participants <handles>] [--start <iso>] [--end <iso>] [--json]`
 - `imsg search --query <text> [--match contains|exact] [--limit 50] [--json]`
-- `imsg send (--to <handle-or-contact-name> | --chat-id <id> | --chat-identifier <id> | --chat-guid <guid>) [--text <text>] [--file <path>] [--service imessage|sms|auto] [--region US] [--json]`
+- `imsg send (--to <handle-or-contact-name> | --chat-id <id> | --chat-identifier <id> | --chat-guid <guid>) [--text <text>] [--file <path>] [--service imessage|sms|auto] [--no-sms-fallback] [--region US] [--json]`
 - `imsg react --chat-id <id> --reaction love|like|dislike|laugh|emphasis|question`
 - `imsg rpc`
 - `imsg completions bash|zsh|fish|llm`
@@ -344,9 +344,12 @@ Introspection:
 
 ```bash
 imsg account                                            # active iMessage account + aliases
+imsg account --local                                   # accounts observed in local history
 imsg whois --address +15551234567 --type phone
+imsg whois --address +15551234567 --local
 imsg whois --address foo@bar.com --type email
 imsg nickname --address +15551234567
+imsg nickname --address +15551234567 --local
 ```
 
 Live events (typing indicators surfaced through the dylib):

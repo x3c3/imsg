@@ -18,6 +18,7 @@ public struct MessageSendOptions: Sendable {
   public var region: String
   public var chatIdentifier: String
   public var chatGUID: String
+  public var allowSMSFallback: Bool
 
   public init(
     recipient: String,
@@ -26,7 +27,8 @@ public struct MessageSendOptions: Sendable {
     service: MessageService = .auto,
     region: String = "US",
     chatIdentifier: String = "",
-    chatGUID: String = ""
+    chatGUID: String = "",
+    allowSMSFallback: Bool = true
   ) {
     self.recipient = recipient
     self.text = text
@@ -35,6 +37,7 @@ public struct MessageSendOptions: Sendable {
     self.region = region
     self.chatIdentifier = chatIdentifier
     self.chatGUID = chatGUID
+    self.allowSMSFallback = allowSMSFallback
   }
 }
 
@@ -71,6 +74,7 @@ public struct MessageSender {
         "Sending requires Messages.app automation and is only supported on macOS.")
     #else
       var resolved = options
+      let requestedService = resolved.service
       let chatTarget = resolveChatTarget(&resolved)
       let useChat = !chatTarget.isEmpty
       if useChat == false {
@@ -83,8 +87,28 @@ public struct MessageSender {
         resolved.attachmentPath = try stageAttachment(at: resolved.attachmentPath)
       }
 
-      try sendViaAppleScript(resolved, chatTarget: chatTarget, useChat: useChat)
+      let smsFallbackEligible =
+        resolved.allowSMSFallback
+        && requestedService == .auto
+        && useChat == false
+        && resolved.service == .imessage
+        && resolved.attachmentPath.isEmpty
+        && !resolved.text.isEmpty
+        && recipientIsPhoneNumber(resolved.recipient)
+
+      try sendViaAppleScript(
+        resolved,
+        chatTarget: chatTarget,
+        useChat: useChat,
+        smsFallbackEligible: smsFallbackEligible
+      )
     #endif
+  }
+
+  private func recipientIsPhoneNumber(_ recipient: String) -> Bool {
+    let trimmed = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty || trimmed.contains("@") { return false }
+    return trimmed.contains(where: \.isNumber)
   }
 
   public static func stageAttachmentForMessagesApp(at path: String) throws -> String {
@@ -130,19 +154,35 @@ public struct MessageSender {
   private func sendViaAppleScript(
     _ resolved: MessageSendOptions,
     chatTarget: String,
-    useChat: Bool
+    useChat: Bool,
+    smsFallbackEligible: Bool
   ) throws {
     let script = appleScript()
-    let arguments = [
-      resolved.recipient,
-      resolved.text,
-      resolved.service.rawValue,
-      resolved.attachmentPath,
-      resolved.attachmentPath.isEmpty ? "0" : "1",
-      chatTarget,
-      useChat ? "1" : "0",
-    ]
-    try runner(script, arguments)
+    func arguments(forService service: MessageService) -> [String] {
+      [
+        resolved.recipient,
+        resolved.text,
+        service.rawValue,
+        resolved.attachmentPath,
+        resolved.attachmentPath.isEmpty ? "0" : "1",
+        chatTarget,
+        useChat ? "1" : "0",
+      ]
+    }
+
+    do {
+      try runner(script, arguments(forService: resolved.service))
+    } catch {
+      guard smsFallbackEligible else { throw error }
+      do {
+        try runner(script, arguments(forService: .sms))
+      } catch let smsError {
+        throw IMsgError.appleScriptFailure(
+          "iMessage send failed (\(error.localizedDescription)); "
+            + "SMS fallback also failed (\(smsError.localizedDescription))"
+        )
+      }
+    }
   }
 
   private func appleScript() -> String {
