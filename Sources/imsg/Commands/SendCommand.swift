@@ -99,11 +99,19 @@ enum SendCommand {
     }
 
     let dbPath = values.option("db") ?? MessageStore.defaultPath
-    let store = try storeFactory(dbPath)
+    let store: MessageStore?
+    if input.hasChatTarget {
+      store = try storeFactory(dbPath)
+    } else {
+      store = try? storeFactory(dbPath)
+    }
 
     let resolvedTarget = try await ChatTargetResolver.resolveChatTarget(
       input: input,
       lookupChat: { chatID in
+        guard let store else {
+          throw IMsgError.invalidChatTarget("Messages database unavailable")
+        }
         return try store.chatInfo(chatID: chatID)
       },
       unknownChatError: { chatID in
@@ -115,7 +123,7 @@ enum SendCommand {
     }
 
     var effectiveService = service
-    if service == .auto && !input.hasChatTarget && !input.recipient.isEmpty {
+    if let store, service == .auto && !input.hasChatTarget && !input.recipient.isEmpty {
       switch resolveService(store, input.recipient, region) {
       case .imessage, .unknown:
         effectiveService = .auto
@@ -147,6 +155,9 @@ enum SendCommand {
 
     var sentMessage: Message?
     if input.hasChatTarget {
+      guard let store else {
+        throw IMsgError.invalidChatTarget("Messages database unavailable")
+      }
       let verificationChatID =
         input.chatID
         ?? resolvedTarget.preferredIdentifier.flatMap {

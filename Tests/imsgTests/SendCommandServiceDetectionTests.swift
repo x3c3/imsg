@@ -6,6 +6,38 @@ import Testing
 @testable import IMsgCore
 @testable import imsg
 
+private enum SendCommandServiceDetectionTestError: Error {
+  case unavailable
+}
+
+@Test
+func sendCommandDirectSendDoesNotRequireMessagesDatabase() async throws {
+  let values = ParsedValues(
+    positional: [],
+    options: [
+      "to": ["+436769770569"],
+      "text": ["hi"],
+      "service": ["auto"],
+    ],
+    flags: []
+  )
+  let runtime = RuntimeOptions(parsedValues: values)
+  var captured: MessageSendOptions?
+  _ = try await StdoutCapture.capture {
+    try await SendCommand.run(
+      values: values,
+      runtime: runtime,
+      sendMessage: { options in captured = options },
+      resolveSentMessage: { _, _, _, _ in nil },
+      storeFactory: { _ in throw SendCommandServiceDetectionTestError.unavailable }
+    )
+  }
+
+  #expect(captured?.recipient == "+436769770569")
+  #expect(captured?.service == .auto)
+  #expect(captured?.allowSMSFallback == true)
+}
+
 @Test
 func sendCommandAutoDetectionUsesRegionNormalizedRecipient() async throws {
   let path = try CommandTestDatabase.makePath()

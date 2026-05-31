@@ -62,7 +62,7 @@ imsg send --to "+14155551212" --text "hi" --service sms
 imsg send --to "+14155551212" --text "hi" --no-sms-fallback
 ```
 
-- `auto` — `imsg` first checks local Messages history for the handle's observed service. Existing SMS-only phone threads use SMS; known iMessage handles use iMessage; unknown handles try iMessage. For text-only direct phone sends, a failed iMessage attempt retries once over SMS unless `--no-sms-fallback` is set.
+- `auto` — `imsg` first checks local Messages history for the handle's observed service when `chat.db` is readable. Existing SMS-only phone threads use SMS; known iMessage handles use iMessage; unknown handles, or sessions without Full Disk Access, try iMessage. For text-only direct phone sends, a failed iMessage attempt retries once over SMS unless `--no-sms-fallback` is set.
 - `imessage` — force iMessage. Fails fast if the recipient isn't on iMessage.
 - `sms` — force SMS relay. Requires Text Message Forwarding enabled on your iPhone for this Mac.
 
