@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.1 - Unreleased
+## 0.11.0 - 2026-05-31
 
 ### Send
 - feat: add SIP-free local iMessage/SMS service detection for direct `send --service auto`, with text-only iMessage-to-SMS fallback that never overrides explicit `--service` choices (#132, thanks @ranaroussi).
