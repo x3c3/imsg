@@ -179,6 +179,9 @@ extension RPCServer {
     }
     let transport = try RPCSendTransport.parse(stringParam(params["transport"]))
     let region = stringParam(params["region"]) ?? "US"
+    let selectedMessageGuid = stringParam(
+      params["reply_to"] ?? params["replyTo"] ?? params["reply_to_guid"] ?? params["message_guid"]
+    ).flatMap { $0.isEmpty ? nil : $0 }
     let rawRecipient = stringParam(params["to"]) ?? ""
     let rawInput = ChatTargetInput(
       recipient: rawRecipient,
@@ -269,6 +272,7 @@ extension RPCServer {
           chatGUID: bridgeChatGUID,
           text: text,
           file: file,
+          selectedMessageGuid: selectedMessageGuid,
           textFormatting: textFormatting
         )
         var result: [String: Any] = ["ok": true, "transport": "bridge"]
@@ -285,16 +289,20 @@ extension RPCServer {
         respond(id: id, result: result)
         return
       } catch let err as RPCError {
-        if transport == .bridge {
+        if transport == .bridge || selectedMessageGuid != nil {
           throw err
         }
       } catch {
-        if transport == .bridge {
+        if transport == .bridge || selectedMessageGuid != nil {
           throw RPCError.internalError(String(describing: error))
         }
       }
     } else if transport == .bridge {
       throw RPCError.invalidParams("bridge transport requires an existing chat target")
+    } else if selectedMessageGuid != nil {
+      throw RPCError.invalidParams(
+        "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies"
+      )
     }
 
     try sendMessage(options)
@@ -525,28 +533,6 @@ extension RPCServer {
     return nil
   }
 
-  private func sendViaBridge(
-    chatGUID: String,
-    text: String,
-    file: String,
-    textFormatting: Any? = nil
-  ) async throws -> [String: Any] {
-    if !file.isEmpty {
-      guard text.isEmpty else {
-        throw RPCError.invalidParams("bridge transport does not support text and file together")
-      }
-      let stagedFile = try stageAttachment(file)
-      return try await bridgeInvoker(
-        .sendAttachment,
-        ["chatGuid": chatGUID, "filePath": stagedFile, "isAudioMessage": false]
-      )
-    }
-    var messageParams: [String: Any] = ["chatGuid": chatGUID, "message": text]
-    if let textFormatting {
-      messageParams["textFormatting"] = textFormatting
-    }
-    return try await bridgeInvoker(.sendMessage, messageParams)
-  }
 }
 
 func buildMessagePayload(
