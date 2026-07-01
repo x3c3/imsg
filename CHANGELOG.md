@@ -1,10 +1,19 @@
 # Changelog
 
-## 0.11.2 - Unreleased
+## 0.12.0 - 2026-07-02
 
 ### Send
 - fix: thread attributed-text formatting through the RPC `send` bridge path, not just `send-rich`, so direct/handle sends render **bold**/*italic*/etc. on macOS 15+. `handleSend` now forwards format ranges to the bridge, accepting `formatting` (the key OpenClaw's `message` tool emits) alongside `text_formatting`/`textFormatting` (#143, thanks @omarshahine).
+- fix: honor `reply_to` aliases on RPC `send` for text and captioned attachments, and fail closed instead of silently delivering an unthreaded AppleScript message when the bridge is unavailable (#144, #145, thanks @TurboTheTurtle and @dkattan).
+
+### Native Polls
 - feat: add bridge-backed native poll voting through `imsg poll vote`, `poll.vote`, and `messages.poll.vote` (#148, thanks @omarshahine).
+
+### Local Lookups
+- fix: include the Contacts usage description in packaged binaries and distinguish unavailable Contacts access from a local address with no match (#147, thanks @cloopadoop).
+
+### Advanced IMCore
+- fix: restore `chat-delete` on macOS 26 by falling back from `deleteChat:` to `IMChatRegistry._chat_remove:`, while failing closed when neither selector is available (#146, #149, thanks @alexzhues).
 
 ## 0.11.1 - 2026-06-10
 
