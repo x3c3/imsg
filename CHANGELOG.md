@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.12.1 - Unreleased
+## 0.12.1 - 2026-07-02
 
 ### Packaging
 - fix: make Linux release archives standalone by statically linking the Swift runtime.
