@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.12.3 - Unreleased
+
 ## 0.12.2 - 2026-07-04
 
 ### Native Polls
