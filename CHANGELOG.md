@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.12.2 - Unreleased
+## 0.12.2 - 2026-07-04
 
 ### Native Polls
 - fix: resolve native poll vote option text from Add Choice update rows when votes still reference the original poll message (#152, #153, thanks @veteranbv).
