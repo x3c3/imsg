@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.12.3 - Unreleased
+## 0.12.3 - 2026-07-06
 
 ### Native Polls
 - fix: show native poll questions by sending a plain caption after created polls and backfilling empty inbound questions from clean native caption rows (#155, thanks @omarshahine).
